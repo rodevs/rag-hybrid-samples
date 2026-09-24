@@ -5,7 +5,7 @@
   "description": "Guía y laboratorio interactivo (simulado) de un RAG híbrido: dense + BM25 + RRF + rerank.",
   "scripts": {
     "start": "python3 -m http.server 8080",
-    "test": "node --test tests/engine.test.js"
+    "test": "node --test tests/engine.test.js tests/learn.test.js"
   },
   "license": "UNLICENSED"
 }
