@@ -1,0 +1,11 @@
+{
+  "name": "hybrid-rag-guide",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Guía y laboratorio interactivo (simulado) de un RAG híbrido: dense + BM25 + RRF + rerank.",
+  "scripts": {
+    "start": "python3 -m http.server 8080",
+    "test": "node --test tests/engine.test.js"
+  },
+  "license": "UNLICENSED"
+}

@@ -1,7 +1,25 @@
 # rag-hybrid-samples
 
-Guía de referencia para construir un RAG híbrido (dense + BM25 + RRF + rerank) con FastAPI,
-Qdrant, Docker, Terraform (AWS ECS Fargate) y GitHub Actions.
+Multirepo de ejemplos, guías y pruebas de concepto (PoC) sobre **RAG** (Retrieval-Augmented Generation).
+Cada proyecto vive en su propia carpeta dentro de [`projects/`](projects/) y es autocontenido: su código, su documentación, sus tests y sus instrucciones de ejecución.
 
-- [`docs/rag-hibrido-guia.md`](docs/rag-hibrido-guia.md) — guía paso a paso (versión revisada).
-- [`docs/REVISION.md`](docs/REVISION.md) — hallazgos de la revisión técnica: qué se corrigió y por qué.
+## Proyectos
+
+| Proyecto | Tipo | Descripción |
+|---|---|---|
+| [`hybrid-rag-guide`](projects/hybrid-rag-guide/) | Guía + web interactiva | Guía paso a paso de un RAG híbrido (dense + BM25 + RRF + rerank) con su revisión técnica, y un laboratorio web simulado para recorrer indexación, consulta, almacenamiento y reindexado blue-green. |
+
+## Convenciones
+
+- **Una carpeta por proyecto:** `projects/<nombre-en-kebab-case>/`.
+- **README obligatorio** en cada proyecto con: qué es, cómo ejecutarlo, cómo probarlo y su estructura.
+- **Autocontenido:** dependencias, lockfiles, `.env.example`, Dockerfile e infraestructura dentro de la carpeta del proyecto. Nada compartido implícitamente entre proyectos.
+- **Documentación** en `projects/<nombre>/docs/`.
+- **Secretos:** nunca en el repo. Cada proyecto con credenciales incluye un `.env.example`; los `.env` están ignorados en la raíz.
+- **CI por proyecto:** un workflow en `.github/workflows/<nombre>.yml` filtrado por `paths: projects/<nombre>/**`, para que un cambio en un proyecto no dispare los demás.
+
+## Agregar un proyecto
+
+1. Crea `projects/<nombre>/` con su `README.md`.
+2. Agrega una fila a la tabla de proyectos de arriba.
+3. Si tiene tests, agrega `.github/workflows/<nombre>.yml` con el filtro de `paths`.

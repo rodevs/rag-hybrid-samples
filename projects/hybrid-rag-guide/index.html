@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Laboratorio RAG Híbrido</title>
+<meta name="description" content="Recorrido interactivo y simulado de un RAG híbrido: indexación, búsqueda densa y BM25, fusión RRF, reranking, generación con citas y reindexado blue-green.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=JetBrains+Mono:wght@400;600&family=Public+Sans:ital,wght@0,400;0,600;0,700;1,400&display=swap">
+<link rel="stylesheet" href="assets/css/app.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-mark" aria-hidden="true"><i></i><i></i></span>
+    <div>
+      <p class="brand-name">Laboratorio RAG Híbrido</p>
+      <p class="brand-sub">Simulación interactiva · todo corre en tu navegador</p>
+    </div>
+  </div>
+  <nav class="tabs" aria-label="Secciones">
+    <a href="#lab" data-view="lab">Recorrido</a>
+    <a href="#bluegreen" data-view="bluegreen">Reindexado blue-green</a>
+    <a href="#sizing" data-view="sizing">Dimensionamiento</a>
+    <a href="#docs" data-view="docs">Documentación</a>
+  </nav>
+</header>
+
+<main>
+  <section id="view-lab" class="view" aria-labelledby="lab-title">
+    <div class="intro">
+      <div>
+        <h1 id="lab-title">Cómo un RAG híbrido indexa, busca y responde</h1>
+        <p>Recorre las 13 etapas con un corpus de 8 documentos ficticios. Cambia parámetros, escribe preguntas o agrega documentos: cada etapa se recalcula al momento. Los embeddings, el reranker y el LLM son simulados y deterministas.</p>
+      </div>
+      <div class="intro-actions">
+        <button class="btn primary" data-action="play" id="play-btn">Reproducir recorrido</button>
+        <button class="btn" data-action="reset-lab">Restablecer</button>
+      </div>
+    </div>
+    <div class="lab">
+      <aside class="map" id="map" aria-label="Mapa del pipeline"></aside>
+      <article class="stage" id="stage" aria-live="polite"></article>
+    </div>
+  </section>
+
+  <section id="view-bluegreen" class="view" hidden aria-labelledby="bg-title">
+    <div class="intro">
+      <div>
+        <h1 id="bg-title">Reindexado sin downtime con alias</h1>
+        <p>Construye <code>docs_v2</code> en paralelo, ingiere un documento mientras se reindexa, evalúa ambas colecciones y cambia el alias de forma atómica. Envía consultas en cualquier momento para ver qué colección responde.</p>
+      </div>
+      <div class="intro-actions">
+        <button class="btn" data-action="bg-reset">Reiniciar simulación</button>
+      </div>
+    </div>
+    <div id="bg"></div>
+  </section>
+
+  <section id="view-sizing" class="view" hidden aria-labelledby="sz-title">
+    <div class="intro">
+      <div>
+        <h1 id="sz-title">¿Cuánta memoria necesita el índice?</h1>
+        <p>Orden de magnitud para un índice HNSW en Qdrant. Sirve para decidir cuantización y para planear el doble de capacidad durante un reindexado blue-green.</p>
+      </div>
+    </div>
+    <div id="sizing"></div>
+  </section>
+
+  <section id="view-docs" class="view" hidden aria-labelledby="docs-title">
+    <h1 id="docs-title" class="sr-only">Documentación</h1>
+    <div class="docs">
+      <aside class="docs-nav">
+        <div class="seg" role="tablist" aria-label="Documento">
+          <button role="tab" data-doc-file="rag-hibrido-guia.md" aria-selected="true">Guía</button>
+          <button role="tab" data-doc-file="REVISION.md" aria-selected="false">Revisión técnica</button>
+        </div>
+        <nav id="toc" aria-label="Contenido del documento"></nav>
+      </aside>
+      <article class="md" id="md"><p class="muted">Cargando documento…</p></article>
+    </div>
+  </section>
+</main>
+
+<footer class="foot">
+  <p>Proyecto <code>projects/hybrid-rag-guide</code> · Contenido educativo; los resultados son simulados y no provienen de modelos reales.</p>
+</footer>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/4.3.0/marked.min.js"></script>
+<script src="assets/js/corpus.js"></script>
+<script src="assets/js/engine.js"></script>
+<script src="assets/js/app.js"></script>
+</body>
+</html>
