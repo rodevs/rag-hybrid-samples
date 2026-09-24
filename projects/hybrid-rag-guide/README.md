@@ -12,6 +12,19 @@ Todo el comportamiento es **simulado y determinista**: no hay llamadas a modelos
 | **Dimensionamiento** | Calculadora de RAM/disco para un índice HNSW según fragmentos, dimensiones, cuantización y `m`. |
 | **Documentación** | La guía paso a paso y la revisión técnica ([`docs/`](docs/)), renderizadas con índice lateral. |
 
+## En el teléfono (PWA)
+
+La web es una app instalable que funciona sin conexión:
+
+- **Un paso a la vez:** en pantallas de hasta 999 px el recorrido muestra una sola etapa, con barra de progreso, botones Anterior/Siguiente al alcance del pulgar y gesto de deslizar ← →. "Paso N de 13" abre la lista de todas las etapas.
+- **Detalles plegables:** JSON, tablas secundarias y notas de producción empiezan plegados en móvil y recuerdan si los abriste.
+- **Navegación inferior** con las cuatro secciones y objetivos táctiles de al menos 44 px. Los campos usan 16 px para evitar el zoom automático de iOS.
+- **Retoma donde te quedaste:** la etapa, el avance y la última pregunta se guardan en el navegador.
+- **Instalar:** botón "Instalar" en Android/Chrome. En iPhone: Safari → Compartir → "Agregar a inicio".
+- **Sin conexión:** `sw.js` guarda la app, la documentación y las fuentes después de la primera visita. Al publicar cambios, sube `VERSION` en `sw.js`.
+
+La instalación y el modo sin conexión requieren HTTPS (GitHub Pages lo da) o `localhost`.
+
 ## Ejecutar
 
 La página carga los Markdown de `docs/` con `fetch`, así que necesita un servidor HTTP (abrir `index.html` como archivo no carga la documentación):
@@ -38,8 +51,11 @@ Cubren el motor simulado: stemming, chunking, IDs deterministas, paráfrasis vs.
 ```
 hybrid-rag-guide/
 ├── index.html              # shell de la página (4 vistas por hash: #lab, #bluegreen, #sizing, #docs)
+├── manifest.webmanifest    # PWA: nombre, íconos, colores, accesos directos
+├── sw.js                   # service worker: uso sin conexión
 ├── assets/
-│   ├── css/app.css         # tokens de diseño (claro/oscuro) y componentes
+│   ├── css/app.css         # tokens de diseño (claro/oscuro), componentes y layout móvil
+│   ├── icons/              # ícono SVG y PNG (192, 512, maskable, apple-touch)
 │   └── js/
 │       ├── corpus.js       # 8 documentos ficticios, preguntas de ejemplo y golden set
 │       ├── engine.js       # motor RAG simulado (UMD: navegador y Node)

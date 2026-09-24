@@ -1,0 +1,24 @@
+{
+  "name": "Laboratorio RAG Híbrido",
+  "short_name": "RAG Lab",
+  "description": "Aprende paso a paso cómo un RAG híbrido indexa, busca y responde. Simulación interactiva que funciona sin conexión.",
+  "lang": "es",
+  "start_url": "./#lab",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0e1412",
+  "theme_color": "#16201c",
+  "categories": ["education", "developer"],
+  "icons": [
+    { "src": "assets/icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "assets/icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "assets/icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" },
+    { "src": "assets/icons/icon.svg", "sizes": "any", "type": "image/svg+xml" }
+  ],
+  "shortcuts": [
+    { "name": "Recorrido", "url": "./#lab" },
+    { "name": "Reindexado blue-green", "url": "./#bluegreen" },
+    { "name": "Documentación", "url": "./#docs" }
+  ]
+}
