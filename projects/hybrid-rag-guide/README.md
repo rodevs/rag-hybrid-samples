@@ -7,6 +7,7 @@ Todo el comportamiento es **simulado y determinista**: no hay llamadas a modelos
 
 | Sección de la web | Qué se puede hacer |
 |---|---|
+| **Inicio** | Página principal: qué aprenderás en cada fase, las 13 etapas con lo que enseña cada una, y sistemas reales (Qdrant, OpenSearch, Elasticsearch, Weaviate, Milvus, Vespa, pgvector, Azure AI Search, Pinecone, modelos y frameworks) que implementan esas técnicas, con enlaces a la etapa correspondiente. Si ya empezaste, ofrece continuar donde te quedaste. |
 | **Recorrido** | Las 13 etapas del pipeline, de la indexación a la verificación de citas. Cada etapa muestra qué entra, qué sale, qué se guarda y qué cambia en producción. Puedes editar el corpus, el chunking, el modelo de embeddings, la pregunta, el modo de búsqueda, `k` de RRF, el umbral de rerank y simular una alucinación. |
 | **Reindexado blue-green** | Crear `docs_v2`, reindexar desde S3, ingerir un documento durante el reindexado (dual-write / catch-up), evaluar ambas colecciones y cambiar el alias. El tráfico de consultas muestra qué colección responde y qué pasa si el modelo de la API no coincide con el de la colección. |
 | **Dimensionamiento** | Calculadora de RAM/disco para un índice HNSW según fragmentos, dimensiones, cuantización y `m`. |
@@ -50,7 +51,7 @@ Cubren el motor simulado: stemming, chunking, IDs deterministas, paráfrasis vs.
 
 ```
 hybrid-rag-guide/
-├── index.html              # shell de la página (4 vistas por hash: #lab, #bluegreen, #sizing, #docs)
+├── index.html              # shell y portada (5 vistas por hash: #home, #lab, #bluegreen, #sizing, #docs)
 ├── manifest.webmanifest    # PWA: nombre, íconos, colores, accesos directos
 ├── sw.js                   # service worker: uso sin conexión
 ├── assets/
@@ -59,6 +60,7 @@ hybrid-rag-guide/
 │   └── js/
 │       ├── corpus.js       # 8 documentos ficticios, preguntas de ejemplo y golden set
 │       ├── engine.js       # motor RAG simulado (UMD: navegador y Node)
+│       ├── systems.js      # sistemas reales de la portada y a qué etapa enlaza cada concepto
 │       └── app.js          # UI: render de etapas, blue-green, dimensionamiento, docs
 ├── docs/
 │   ├── rag-hibrido-guia.md # guía paso a paso (código, Docker, Terraform, CI/CD)

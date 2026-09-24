@@ -82,43 +82,43 @@
 
   // ================================================================ etapas
   const STAGES = [
-    { id: 'docs', phase: 'index', title: 'Documentos fuente', io: ['PDFs', 'Documentos a indexar'], ref: 'Paso 7',
+    { id: 'docs', learn: 'Qué documentos entran al sistema y por qué conviene guardar los originales.', phase: 'index', title: 'Documentos fuente', io: ['PDFs', 'Documentos a indexar'], ref: 'Paso 7',
       lede: 'Todo empieza con los documentos que el sistema podrá consultar. Activa o desactiva documentos, o agrega uno propio: el índice se reconstruye y todas las etapas se recalculan.',
       prod: ['Guarda cada original en almacenamiento durable (S3) desde el primer día: es la fuente para reindexar.', 'Usa como doc_id un hash del contenido o un identificador estable del sistema de origen, nunca el nombre del archivo.', 'Valida tipo y tamaño del archivo y exige autenticación para ingerir.'] },
-    { id: 'parse', phase: 'index', title: 'Parseo', io: ['PDF', 'Texto por página + doc_id'], ref: 'Paso 5',
+    { id: 'parse', learn: 'Cómo un PDF se vuelve texto por página y por qué el doc_id es un hash del contenido.', phase: 'index', title: 'Parseo', io: ['PDF', 'Texto por página + doc_id'], ref: 'Paso 5',
       lede: 'El PDF se convierte en texto, página por página. Se conserva el número de página para poder citar después, y el doc_id se calcula a partir del contenido.',
       prod: ['pypdf no hace OCR: un PDF escaneado devuelve texto vacío.', 'Registra qué parser y versión se usó; cambiarlo obliga a reindexar.', 'Guarda el texto extraído junto al original para reindexar sin volver a parsear.'] },
-    { id: 'chunk', phase: 'index', title: 'Chunking', io: ['Texto por página', 'Fragmentos con página'], ref: 'Paso 5',
+    { id: 'chunk', learn: 'Cómo el tamaño y el traslape de los fragmentos cambian lo que se puede encontrar.', phase: 'index', title: 'Chunking', io: ['Texto por página', 'Fragmentos con página'], ref: 'Paso 5',
       lede: 'Cada página se corta en fragmentos de N palabras con un traslape para no partir ideas a la mitad. Un fragmento nunca cruza de una página a otra.',
       prod: ['Los modelos miden en tokens: en español una palabra equivale a 1.3–1.6 tokens aprox.', 'Cortar por estructura (títulos, párrafos) suele funcionar mejor que cortar cada N palabras.', 'Cambiar tamaño o traslape cambia todos los fragmentos: requiere un reindexado blue-green.'] },
-    { id: 'embed', phase: 'index', title: 'Embeddings', io: ['Fragmento', 'Vector denso + vector sparse'], ref: 'Paso -1',
+    { id: 'embed', learn: 'Qué es un embedding, qué es un vector sparse y por qué se guardan los dos.', phase: 'index', title: 'Embeddings', io: ['Fragmento', 'Vector denso + vector sparse'], ref: 'Paso -1',
       lede: 'Cada fragmento se guarda con dos vectores en el mismo punto de Qdrant: "dense", que captura el significado, y "bm25", un vector sparse con los términos exactos y su frecuencia (lo genera fastembed con el modelo Qdrant/bm25, localmente y sin costo).',
       prod: ['Envía los textos a la API de embeddings en lotes y con reintentos.', 'El vector sparse usa una longitud promedio fija: depende solo de su chunk y no hay que recalcularlo cuando llegan documentos nuevos.', 'Guarda en el payload qué modelo generó el vector.', 'Si cambias de modelo, los vectores viejos y nuevos no son comparables.'] },
-    { id: 'store', phase: 'index', title: 'Almacenamiento', io: ['Vectores + metadata', 'Puntos en Qdrant, objetos en S3'], ref: 'Paso 11',
+    { id: 'store', learn: 'Qué queda guardado en Qdrant y en S3, y para qué sirve el alias.', phase: 'index', title: 'Almacenamiento', io: ['Vectores + metadata', 'Puntos en Qdrant, objetos en S3'], ref: 'Paso 11',
       lede: 'La ingesta escribe en dos lugares. S3 guarda el original y el texto extraído. Qdrant guarda un punto por fragmento con dos vectores con nombre (dense y bm25) y un payload con texto y metadata. BM25 no es un índice aparte: vive en la misma colección. La API consulta siempre el alias docs, nunca la colección física.',
       prod: ['IDs deterministas (uuid5 de doc_id:chunk_index): reingestar sobrescribe en vez de duplicar.', 'Crea índices de payload para doc_id y chunk_index (filtros y borrados).', 'Crea la colección versionada y su alias desde el primer día.'] },
-    { id: 'question', phase: 'query', title: 'Pregunta', io: ['Texto de la persona', 'Términos normalizados'], ref: 'Paso 12',
+    { id: 'question', learn: 'Cómo se normaliza una pregunta: acentos, palabras vacías y stemming.', phase: 'query', title: 'Pregunta', io: ['Texto de la persona', 'Términos normalizados'], ref: 'Paso 12',
       lede: 'La pregunta pasa por la misma normalización que los documentos: minúsculas, sin acentos, sin palabras vacías y con stemming. Elige un ejemplo o escribe tu propia pregunta.',
       prod: ['El filtro por tenant_id sale del token del usuario, nunca del cuerpo de la petición.', 'Aplica límites de peticiones por usuario.'] },
-    { id: 'qembed', phase: 'query', title: 'Embedding de la pregunta', io: ['Pregunta', 'Vector de la pregunta'], ref: 'Paso -1',
+    { id: 'qembed', learn: 'Cómo la pregunta cae cerca de los fragmentos con significado parecido.', phase: 'query', title: 'Embedding de la pregunta', io: ['Pregunta', 'Vector de la pregunta'], ref: 'Paso -1',
       lede: 'La pregunta se convierte en vector con el mismo modelo que se usó al indexar. En el mapa, la pregunta cae cerca de los fragmentos con significado parecido.',
       prod: ['El modelo de la pregunta debe ser el mismo de la colección. Si cambias de modelo, cambia ambos a la vez (ver Reindexado blue-green).', 'Es un costo pequeño pero recurrente: uno por pregunta.'] },
-    { id: 'dense', phase: 'query', title: 'Búsqueda densa', io: ['Vector de la pregunta', 'Top-N por similitud coseno'], ref: 'Paso 6',
+    { id: 'dense', learn: 'Por qué la búsqueda por significado entiende paráfrasis y falla con folios.', phase: 'query', title: 'Búsqueda densa', io: ['Vector de la pregunta', 'Top-N por similitud coseno'], ref: 'Paso 6',
       lede: 'Busca los fragmentos cuyo vector apunta en la dirección más parecida a la del vector de la pregunta (similitud coseno). Entiende paráfrasis, pero es débil con códigos y folios.',
       prod: ['Es el prefetch "dense" de la llamada híbrida a Qdrant (ver etapa Fusión RRF).', 'Con millones de vectores se usa un índice aproximado (HNSW): muy rápido a cambio de una pérdida mínima de precisión.', 'El filtro por tenant va dentro del prefetch.'] },
-    { id: 'bm25', phase: 'query', title: 'BM25 en Qdrant', io: ['Términos de la pregunta', 'Top-N por coincidencia exacta'], ref: 'Paso 6',
+    { id: 'bm25', learn: 'Por qué los términos raros pesan más y cómo Qdrant aplica el IDF.', phase: 'query', title: 'BM25 en Qdrant', io: ['Términos de la pregunta', 'Top-N por coincidencia exacta'], ref: 'Paso 6',
       lede: 'BM25 puntúa coincidencias exactas de términos. Corre dentro de Qdrant sobre el vector sparse "bm25": la frecuencia de cada término se guardó al indexar y Qdrant multiplica por el IDF, que calcula con las estadísticas de la colección (Modifier.IDF). Los términos raros, como un folio, pesan más.',
       prod: ['Es el prefetch "bm25" de la misma llamada que la búsqueda densa.', 'Configura el analizador para español (stemming y palabras vacías).', 'OpenSearch solo si ya lo operas o necesitas sinónimos y diccionarios de dominio.'] },
-    { id: 'rrf', phase: 'query', title: 'Fusión RRF en Qdrant', io: ['Dos prefetch (dense y bm25)', 'Una lista fusionada'], ref: 'Paso 6',
+    { id: 'rrf', learn: 'Cómo se fusionan dos rankings sin comparar sus scores, en una sola llamada.', phase: 'query', title: 'Fusión RRF en Qdrant', io: ['Dos prefetch (dense y bm25)', 'Una lista fusionada'], ref: 'Paso 6',
       lede: 'Qdrant combina las dos listas en el servidor usando solo la posición: cada fragmento suma 1/(k + posición) por cada lista donde aparece. Así no hay que comparar scores de escalas distintas. Búsqueda densa, BM25 y fusión son una sola llamada a la Query API.',
       prod: ['k = 60 es el valor típico; revisa qué constante usa tu versión de Qdrant y si permite ajustarla.', 'Si necesitas otro k, pide las dos listas por separado y fusiona en tu código.'] },
-    { id: 'rerank', phase: 'query', title: 'Reranking', io: ['Candidatos fusionados', 'Top-K sobre el umbral'], ref: 'Paso 6',
+    { id: 'rerank', learn: 'Cómo se descartan candidatos y cuándo es mejor decir "no lo sé".', phase: 'query', title: 'Reranking', io: ['Candidatos fusionados', 'Top-K sobre el umbral'], ref: 'Paso 6',
       lede: 'Un cross-encoder lee la pregunta y cada candidato juntos y les asigna un score de relevancia. Es más preciso y más caro, por eso solo reordena los candidatos ya fusionados. Lo que queda bajo el umbral no llega al LLM.',
       prod: ['Calibra el umbral con el golden set.', 'Si ningún candidato supera el umbral, responde "no lo sé" sin llamar al LLM.'] },
-    { id: 'generate', phase: 'query', title: 'Generación', io: ['Pregunta + Top-K', 'Respuesta con citas [n]'], ref: 'Paso 7',
+    { id: 'generate', learn: 'Cómo se arma el prompt con citas y qué hacer con instrucciones escondidas.', phase: 'query', title: 'Generación', io: ['Pregunta + Top-K', 'Respuesta con citas [n]'], ref: 'Paso 7',
       lede: 'El LLM recibe instrucciones, la pregunta y los fragmentos numerados. Debe responder solo con ese contexto y citar cada afirmación. Aquí el LLM es simulado: extrae las oraciones más relevantes.',
       prod: ['Delimita el contexto y trata su contenido como datos, no como instrucciones.', 'Un fragmento con instrucciones embebidas se pone en cuarentena.', 'El LLM suele ser el costo dominante por consulta.'] },
-    { id: 'verify', phase: 'query', title: 'Verificación de citas', io: ['Respuesta + fragmentos', 'Citas validadas'], ref: 'Paso 7',
+    { id: 'verify', learn: 'Cómo comprobar que cada cita exista y respalde lo que dice la respuesta.', phase: 'query', title: 'Verificación de citas', io: ['Respuesta + fragmentos', 'Citas validadas'], ref: 'Paso 7',
       lede: 'Antes de mostrar la respuesta se comprueba que cada cita exista y que la oración esté respaldada por el fragmento citado.',
       prod: ['Define qué hacer si falla: reintentar, quitar la oración o marcar baja confianza.', 'Mide la tasa de citas inválidas como métrica de calidad.'] },
   ];
@@ -732,6 +732,25 @@
     }
   }
 
+  // ================================================================ portada
+  function renderHome() {
+    $('#journey').innerHTML = STAGES.map((st, i) => `<li><a class="jstep ${S.visited.has(st.id) && i > 0 ? 'seen' : ''}" href="#lab" data-start="${st.id}">
+      <span class="jn">${i + 1}</span>
+      <span class="jt"><b>${esc(st.title)}</b><small>${esc(st.learn)}</small></span>
+      <span class="pill ${st.phase === 'index' ? 'dense' : 'sparse'}">${st.phase === 'index' ? 'Indexación' : 'Consulta'}</span></a></li>`).join('');
+    const cont = $('#continue-btn');
+    const i = stageIdx(S.stage);
+    cont.hidden = !(S.visited.size > 1 && i > 0);
+    if (!cont.hidden) { cont.dataset.start = S.stage; cont.textContent = `Continuar: paso ${i + 1} · ${STAGES[i].title}`; }
+    const SY = window.RagSystems;
+    $('#systems').innerHTML = SY ? SY.GROUPS.map(g => `<div class="sys-group"><h3>${esc(g.title)}</h3><p class="sec-intro">${esc(g.intro)}</p>
+      <div class="sys-grid">${g.items.map(it => `<article class="sys">
+        <header><a href="${esc(it.url)}" target="_blank" rel="noopener noreferrer">${esc(it.name)} <span aria-hidden="true">↗</span></a><small>${esc(it.kind)}</small></header>
+        <p>${esc(it.what)}</p>
+        <div class="sys-tags">${it.concepts.map(c => `<button class="tag-btn" data-concept="${c}">${esc(SY.CONCEPTS[c].label)}</button>`).join('')}</div>
+      </article>`).join('')}</div></div>`).join('') : '';
+  }
+
   // ================================================================ blue-green
   const BG = {};
   const LATE_Q = '¿Dónde se estacionan las visitas?';
@@ -1088,13 +1107,14 @@
   }
 
   // ================================================================ router y clics globales
-  const VIEWS = ['lab', 'bluegreen', 'sizing', 'docs'];
+  const VIEWS = ['home', 'lab', 'bluegreen', 'sizing', 'docs'];
   function route() {
-    const v = VIEWS.includes(location.hash.slice(1)) ? location.hash.slice(1) : 'lab';
+    const v = VIEWS.includes(location.hash.slice(1)) ? location.hash.slice(1) : 'home';
     VIEWS.forEach(x => { $('#view-' + x).hidden = x !== v; });
     document.body.classList.toggle('lab-active', v === 'lab');
     $$('.tabs a').forEach(a => { if (a.dataset.view === v) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); });
     if (v !== 'lab') stopPlay();
+    if (v === 'home') renderHome();
     if (v === 'lab') renderLab();
     if (v === 'bluegreen') renderBG();
     if (v === 'sizing') renderSizing();
@@ -1107,6 +1127,20 @@
   window.addEventListener('hashchange', () => { window.scrollTo(0, 0); route(); });
 
   document.addEventListener('click', e => {
+    const start = e.target.closest('[data-start]');
+    if (start) {   // enlaces de la portada a una etapa concreta (el href #lab cambia la vista)
+      S.stage = start.dataset.start;
+      S.visited.add(S.stage);
+      if (location.hash === '#lab') { e.preventDefault(); renderLab(); window.scrollTo(0, 0); }
+      return;
+    }
+    const concept = e.target.closest('[data-concept]');
+    if (concept && window.RagSystems) {
+      const target = window.RagSystems.CONCEPTS[concept.dataset.concept].target;
+      if (target.startsWith('#')) location.hash = target.slice(1);
+      else { S.stage = target; S.visited.add(target); location.hash = 'lab'; }
+      return;
+    }
     const st = e.target.closest('[data-stage]');
     if (st && st.dataset.stage) { goStage(st.dataset.stage); return; }
     const ref = e.target.closest('[data-doc-ref]');
