@@ -25,12 +25,27 @@
     clearTimeout(toastTimer);
     toastTimer = setTimeout(() => { t.hidden = true; }, 2200);
   }
+  // pantalla angosta: un paso a la vez, paneles secundarios plegados
+  const mq = window.matchMedia('(max-width: 999px)');
+  const isMobile = () => mq.matches;
+  const STORE_KEY = 'rag-lab-v1';
+  const saved = (() => { try { return JSON.parse(localStorage.getItem(STORE_KEY)) || {}; } catch (e) { return {}; } })();
+  function persist() {
+    try { localStorage.setItem(STORE_KEY, JSON.stringify({ stage: S.stage, visited: [...S.visited], query: S.query })); } catch (e) { /* almacenamiento no disponible */ }
+  }
+  // estado abierto/cerrado de los paneles plegables, para que sobreviva a los re-render
+  const FOLDS = {};
+  document.addEventListener('toggle', e => {
+    const d = e.target;
+    if (d.matches && d.matches('details[data-fold]')) FOLDS[d.dataset.fold] = d.open;
+  }, true);
+  const foldOpen = (key, dflt) => (FOLDS[key] !== undefined ? FOLDS[key] : dflt) ? ' open' : '';
   const docByKey = (docs, key) => docs.find(d => d.key === key);
   const shortOf = key => (docByKey(S.docs, key) || docByKey([C.LATE_DOC], key) || { short: key.slice(0, 3).toUpperCase() }).short;
 
   // ================================================================ estado del laboratorio
   const S = {};
-  function initLab() {
+  function initLab(fresh) {
     Object.assign(S, {
       docs: C.DOCS.map(d => Object.assign({}, d, { enabled: true })),
       cfg: { name: 'docs_v1', size: 40, overlap: 8, model: 'mock-embed-small' },
@@ -46,6 +61,11 @@
       newTitle: 'Lineamientos de estacionamiento',
       newText: C.LATE_DOC.pages.join('\n\n'),
     });
+    if (!fresh) {
+      if (saved.stage && STAGES.some(st => st.id === saved.stage)) S.stage = saved.stage;
+      if (Array.isArray(saved.visited)) saved.visited.forEach(v => S.visited.add(v));
+      if (typeof saved.query === 'string' && saved.query.trim()) S.query = saved.query;
+    }
     rebuild();
   }
   function rebuild() {
@@ -145,7 +165,7 @@
       generate: 'Lee: payload (texto, fuente, página)',
     }[S.stage] || '';
     const flow = '<div class="flow" aria-hidden="true"></div>';
-    $('#map').innerHTML = `
+    const html = `
       <div class="map-phase"><span class="label">Fase 1 · Indexación</span>${idx.map(s => node(s)).join(flow)}</div>
       <div class="map-phase"><span class="label">Almacenamiento</span>
         <div class="storebox ${io ? 'active' : ''}">
@@ -161,6 +181,8 @@
         </div>${flow}
         ${q.slice(5).map(s => node(s)).join(flow)}
       </div>`;
+    $('#map').innerHTML = html;
+    $('#map-sheet').innerHTML = html;
   }
 
   // ================================================================ componentes
@@ -195,7 +217,7 @@
   }
   function scatter(o) {
     if (!S.pca) return '<p class="muted">Se necesitan al menos 3 fragmentos para dibujar el mapa.</p>';
-    const W = 640, H = 340, pad = 34;
+    const [W, H, pad] = isMobile() ? [360, 300, 26] : [640, 340, 34];
     const pts = S.pca.coords;
     const q = o.query ? S.pca.project(o.query) : null;
     const all = q ? pts.concat([q]) : pts;
@@ -244,7 +266,17 @@
     return `<pre class="code">POST /collections/docs/points/query\n${esc(json)}</pre><p class="panel-note">${note}</p>`;
   }
   const qdrantHint = () => `<div class="callout info"><span>Esta búsqueda no es un servicio aparte: es un <code>prefetch</code> de la llamada híbrida a Qdrant.</span><button class="btn small" data-stage="rrf" style="justify-self:start">Ver la llamada completa</button></div>`;
-  const panel = (title, body, aside) => `<section class="panel"><h3><span>${title}</span>${aside ? `<span class="muted num" style="font-weight:400;font-size:.85rem">${aside}</span>` : ''}</h3>${body}</section>`;
+  // paneles de detalle: en móvil empiezan plegados para que cada paso quepa sin saturar
+  const FOLD_TITLES = new Set(['Agregar un documento', 'Salida: objetos en S3', 'Texto extraído (JSON)', 'Fragmentos resultantes',
+    'Qdrant · configuración de la colección', 'Punto seleccionado', 'Peso de cada término (IDF)', 'Por qué BM25 vive en Qdrant',
+    'La llamada a Qdrant', 'Vecinos en el mapa', 'Prompt enviado al LLM', 'Estrategia de búsqueda']);
+  const panel = (title, body, aside) => {
+    const head = `<span>${title}</span>${aside ? `<span class="muted num panel-aside">${aside}</span>` : ''}`;
+    if (isMobile() && FOLD_TITLES.has(title)) {
+      return `<details class="panel fold" data-fold="${esc(title)}"${foldOpen(title, false)}><summary><h3>${head}</h3></summary>${body}</details>`;
+    }
+    return `<section class="panel"><h3>${head}</h3>${body}</section>`;
+  };
 
   // ================================================================ render de etapas
   const R = {};
@@ -525,7 +557,16 @@
     const prev = STAGES[i - 1], next = STAGES[i + 1];
     let body;
     try { body = R[st.id](); } catch (err) { body = `<div class="callout bad"><b>No se pudo calcular esta etapa</b><span>${esc(err.message)}</span></div>`; }
+    const prodList = `<ul>${st.prod.map(p => `<li>${esc(p)}</li>`).join('')}</ul><button class="btn small" data-doc-ref="${esc(st.ref)}">Leer en la guía: ${esc(st.ref)}</button>`;
+    const prod = isMobile()
+      ? `<details class="prod-note" data-fold="prod"${foldOpen('prod', false)}><summary><h3>En producción</h3></summary>${prodList}</details>`
+      : `<aside class="prod-note"><h3>En producción</h3>${prodList}</aside>`;
     $('#stage').innerHTML = `
+      <div class="stage-top">
+        <button class="steps-btn" data-action="open-steps" aria-haspopup="dialog">Paso ${i + 1} de ${STAGES.length} <span aria-hidden="true">▾</span></button>
+        <div class="progress" role="progressbar" aria-label="Avance del recorrido" aria-valuemin="1" aria-valuemax="${STAGES.length}" aria-valuenow="${i + 1}"><i style="width:${(i + 1) / STAGES.length * 100}%"></i></div>
+        <span class="swipe-hint">Desliza ← → para cambiar de paso</span>
+      </div>
       <header class="stage-head">
         <p class="eyebrow">${st.phase === 'index' ? 'Fase 1 · Indexación' : 'Fase 2 · Consulta'} · etapa ${k} de ${phaseStages.length}</p>
         <h2>${esc(st.title)}</h2>
@@ -534,31 +575,49 @@
       </header>
       ${st.phase === 'query' ? queryStrip() : ''}
       ${body}
-      <aside class="prod-note"><h3>En producción</h3><ul>${st.prod.map(p => `<li>${esc(p)}</li>`).join('')}</ul><button class="btn small" data-doc-ref="${esc(st.ref)}">Leer en la guía: ${esc(st.ref)}</button></aside>
+      ${prod}
       <nav class="stepper" aria-label="Navegación entre etapas">
-        <button class="btn" data-stage="${prev ? prev.id : ''}" ${prev ? '' : 'disabled'}>← ${prev ? esc(prev.title) : 'Inicio'}</button>
-        <button class="btn primary" data-stage="${next ? next.id : ''}" ${next ? '' : 'disabled'}>${next ? esc(next.title) : 'Fin'} →</button>
+        <button class="btn" data-stage="${prev ? prev.id : ''}" ${prev ? '' : 'disabled'} aria-label="Paso anterior${prev ? ': ' + esc(prev.title) : ''}"><span class="ellip">← ${prev ? esc(prev.title) : 'Inicio'}</span></button>
+        <button class="btn primary" data-stage="${next ? next.id : ''}" ${next ? '' : 'disabled'} aria-label="Paso siguiente${next ? ': ' + esc(next.title) : ''}"><span class="ellip">${next ? esc(next.title) : 'Fin del recorrido'}</span> →</button>
       </nav>`;
   }
   function renderLab() {
     renderMap();
     renderStage();
-    // en pantallas angostas el mapa es una tira horizontal: centra la etapa actual
-    const map = $('#map'), cur = $('#map [aria-current="step"]');
-    if (cur && map.scrollWidth > map.clientWidth + 4 && getComputedStyle(map).display === 'flex') {
-      const mr = map.getBoundingClientRect(), cr = cur.getBoundingClientRect();
-      map.scrollLeft += cr.left - mr.left - (mr.width - cr.width) / 2;
-    }
+    $('#view-lab').classList.toggle('at-start', S.stage === STAGES[0].id);
+    persist();
   }
   function goStage(id, keepPlaying) {
     if (!id) return;
     if (!keepPlaying) stopPlay();
     S.stage = id;
     S.visited.add(id);
+    const sheet = $('#step-sheet');
+    if (sheet.open) sheet.close();
     renderLab();
+    if (isMobile()) { window.scrollTo(0, 0); return; }
     const top = $('#stage').getBoundingClientRect().top;
     if (top < 60 || top > window.innerHeight * 0.6) window.scrollTo({ top: window.scrollY + top - 90, behavior: 'smooth' });
   }
+
+  // gesto de deslizar entre pasos (fuera de controles y zonas con scroll propio)
+  (function swipe() {
+    const el = $('#stage');
+    let sx = 0, sy = 0, t0 = 0, skip = true;
+    el.addEventListener('touchstart', e => {
+      const t = e.touches[0];
+      skip = e.touches.length > 1 || !!e.target.closest('input, textarea, select, pre, .table-wrap, svg, .chips, .tokens, .seg, .chunk-text');
+      sx = t.clientX; sy = t.clientY; t0 = Date.now();
+    }, { passive: true });
+    el.addEventListener('touchend', e => {
+      if (skip || !isMobile()) return;
+      const t = e.changedTouches[0];
+      const dx = t.clientX - sx, dy = t.clientY - sy;
+      if (Math.abs(dx) < 70 || Math.abs(dy) > 45 || Date.now() - t0 > 700) return;
+      const i = stageIdx(S.stage) + (dx < 0 ? 1 : -1);
+      if (STAGES[i]) goStage(STAGES[i].id);
+    }, { passive: true });
+  })();
 
   // ---------------------------------------------------------------- reproducción
   let playTimer = null;
@@ -625,7 +684,9 @@
   function labAction(a, el) {
     switch (a) {
       case 'play': togglePlay(); return;
-      case 'reset-lab': stopPlay(); initLab(); renderLab(); toast('Laboratorio restablecido'); return;
+      case 'open-steps': { const d = $('#step-sheet'); if (!d.open) d.showModal(); const cur = $('#map-sheet [aria-current="step"]'); if (cur) cur.scrollIntoView({ block: 'center' }); return; }
+      case 'close-steps': $('#step-sheet').close(); return;
+      case 'reset-lab': stopPlay(); initLab(true); renderLab(); toast('Laboratorio restablecido'); return;
       case 'toggle-doc': {
         const d = docByKey(S.docs, el.dataset.key);
         if (!el.checked && S.docs.filter(x => x.enabled).length === 1) { el.checked = true; toast('Deja al menos un documento activo'); return; }
@@ -850,39 +911,43 @@
       <tr><td colspan="2"><b>MRR</b></td>${Object.values(ev.rows).map(r => `<td class="n"><b>${fx(r.mrr, 2)}</b></td>`).join('')}</tr>
       </tbody></table></div>` : '<p class="muted">Ejecuta la evaluación en el paso 4.</p>';
 
+    // en móvil solo se despliega el primer paso pendiente
+    const doneFlags = [!!c2, !!built, !!(c2 && !missingIn(c2).length && BG.lateIngested), !!ev, onV2, v1gone];
+    const current = Math.max(0, doneFlags.indexOf(false));
+    const stepOpen = k => foldOpen('bg-' + k, !isMobile() || k === current);
     $('#bg').innerHTML = `<div class="bg">
       <div class="steps">
-        <div class="step ${c2 ? 'done' : ''}"><h3>Define la nueva estrategia</h3>
+        <details class="step ${c2 ? 'done' : ''}" data-fold="bg-0"${stepOpen(0)}><summary><h3>Define la nueva estrategia</h3></summary>
           <p>docs_v2 se crea al lado de docs_v1. Producción no se entera.</p>
           <div class="controls">
             <div class="field"><label for="bg-size">Chunk (palabras)</label><input type="range" id="bg-size" data-bg-input="size" min="10" max="80" value="${BG.v2cfg.size}" ${c2 ? 'disabled' : ''}><output>${BG.v2cfg.size}</output></div>
             <div class="field"><label for="bg-overlap">Traslape</label><input type="range" id="bg-overlap" data-bg-input="overlap" min="0" max="${BG.v2cfg.size - 1}" value="${BG.v2cfg.overlap}" ${c2 ? 'disabled' : ''}><output>${BG.v2cfg.overlap}</output></div>
             <div class="field"><label for="bg-model">Modelo</label><select id="bg-model" data-bg-input="model" ${c2 ? 'disabled' : ''}>${Object.keys(E.MODELS).map(m => `<option value="${m}" ${m === BG.v2cfg.model ? 'selected' : ''}>${m} · ${E.dimsOf(m)} dims</option>`).join('')}</select></div>
           </div>
-          <div class="actions"><button class="btn primary" data-bg="bg-create" ${c2 ? 'disabled' : ''}>Crear docs_v2</button></div></div>
+          <div class="actions"><button class="btn primary" data-bg="bg-create" ${c2 ? 'disabled' : ''}>Crear docs_v2</button></div></details>
 
-        <div class="step ${built ? 'done' : ''}"><h3>Reindexa desde S3</h3>
+        <details class="step ${built ? 'done' : ''}" data-fold="bg-1"${stepOpen(1)}><summary><h3>Reindexa desde S3</h3></summary>
           <p>Un job aparte lee cada documento fuente de S3 y lo procesa con la nueva estrategia. Nunca se lee del vector store viejo.</p>
-          <div class="actions"><button class="btn primary" data-bg="bg-build" ${c2 && c2.status === 'empty' ? '' : 'disabled'}>Iniciar reindexado</button></div></div>
+          <div class="actions"><button class="btn primary" data-bg="bg-build" ${c2 && c2.status === 'empty' ? '' : 'disabled'}>Iniciar reindexado</button></div></details>
 
-        <div class="step ${c2 && !missingIn(c2).length && BG.lateIngested ? 'done' : ''}"><h3>No pierdas lo que llega mientras tanto</h3>
+        <details class="step ${c2 && !missingIn(c2).length && BG.lateIngested ? 'done' : ''}" data-fold="bg-2"${stepOpen(2)}><summary><h3>No pierdas lo que llega mientras tanto</h3></summary>
           <p>Ingiere un documento nuevo mientras docs_v2 se construye. Sin dual-write ni catch-up, docs_v2 no lo tendrá.</p>
           <label class="check"><input type="checkbox" data-bg="bg-dual" ${BG.dualWrite ? 'checked' : ''}> Dual-write (la ingesta escribe en ambas colecciones)</label>
-          <div class="actions"><button class="btn" data-bg="bg-late" ${BG.lateIngested ? 'disabled' : ''}>Ingerir «${esc(C.LATE_DOC.title)}»</button><button class="btn" data-bg="bg-catchup" ${c2 && !building && c2.status !== 'empty' ? '' : 'disabled'}>Catch-up</button></div></div>
+          <div class="actions"><button class="btn" data-bg="bg-late" ${BG.lateIngested ? 'disabled' : ''}>Ingerir «${esc(C.LATE_DOC.title)}»</button><button class="btn" data-bg="bg-catchup" ${c2 && !building && c2.status !== 'empty' ? '' : 'disabled'}>Catch-up</button></div></details>
 
-        <div class="step ${ev ? 'done' : ''}"><h3>Evalúa antes de exponer</h3>
+        <details class="step ${ev ? 'done' : ''}" data-fold="bg-3"${stepOpen(3)}><summary><h3>Evalúa antes de exponer</h3></summary>
           <p>Golden set de ${C.GOLDEN.length} preguntas${BG.lateIngested ? ' + 1 sobre el documento nuevo' : ''}. Compara Recall@3 y MRR de ambas colecciones.</p>
-          <div class="actions"><button class="btn" data-bg="bg-eval" ${built ? '' : 'disabled'}>Evaluar</button></div></div>
+          <div class="actions"><button class="btn" data-bg="bg-eval" ${built ? '' : 'disabled'}>Evaluar</button></div></details>
 
-        <div class="step ${onV2 ? 'done' : ''}"><h3>Cambia el alias</h3>
+        <details class="step ${onV2 ? 'done' : ''}" data-fold="bg-4"${stepOpen(4)}><summary><h3>Cambia el alias</h3></summary>
           <p>Una sola llamada borra y crea el alias: las consultas nuevas usan la otra colección al instante.</p>
           <label class="check"><input type="checkbox" data-bg="bg-api-follows" ${BG.apiFollows ? 'checked' : ''}> La API usa el modelo de embedding de la colección activa</label>
           ${warnings.length ? `<div class="callout warn"><b>Antes de cambiar</b>${warnings.map(w => `<span>• ${esc(w)}</span>`).join('')}<span class="actions" style="display:flex;gap:6px;margin-top:6px"><button class="btn small danger" data-bg="bg-switch-force">Cambiar de todos modos</button><button class="btn small" data-bg="bg-cancel-switch">Cancelar</button></span></div>` : ''}
-          <div class="actions"><button class="btn primary" data-bg="bg-switch" ${c2 && c2.status !== 'empty' && !v1gone ? '' : 'disabled'}>${onV2 ? 'Rollback a docs_v1' : 'Apuntar docs → docs_v2'}</button></div></div>
+          <div class="actions"><button class="btn primary" data-bg="bg-switch" ${c2 && c2.status !== 'empty' && !v1gone ? '' : 'disabled'}>${onV2 ? 'Rollback a docs_v1' : 'Apuntar docs → docs_v2'}</button></div></details>
 
-        <div class="step ${v1gone ? 'done' : ''}"><h3>Retira la colección vieja</h3>
+        <details class="step ${v1gone ? 'done' : ''}" data-fold="bg-5"${stepOpen(5)}><summary><h3>Retira la colección vieja</h3></summary>
           <p>Mantén docs_v1 unos días para rollback. Mientras coexisten pagas el doble de memoria.</p>
-          <div class="actions"><button class="btn danger" data-bg="bg-delete-v1" ${onV2 && !v1gone ? '' : 'disabled'}>Eliminar docs_v1</button></div></div>
+          <div class="actions"><button class="btn danger" data-bg="bg-delete-v1" ${onV2 && !v1gone ? '' : 'disabled'}>Eliminar docs_v1</button></div></details>
       </div>
 
       <div style="display:grid;gap:var(--s-4);align-content:start;min-width:0">
@@ -1027,6 +1092,7 @@
   function route() {
     const v = VIEWS.includes(location.hash.slice(1)) ? location.hash.slice(1) : 'lab';
     VIEWS.forEach(x => { $('#view-' + x).hidden = x !== v; });
+    document.body.classList.toggle('lab-active', v === 'lab');
     $$('.tabs a').forEach(a => { if (a.dataset.view === v) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); });
     if (v !== 'lab') stopPlay();
     if (v === 'lab') renderLab();
@@ -1048,7 +1114,22 @@
     const df = e.target.closest('[data-doc-file]');
     if (df) { loadDoc(df.dataset.docFile); return; }
     const toc = e.target.closest('[data-toc]');
-    if (toc) { e.preventDefault(); const h = document.getElementById(toc.dataset.toc); if (h) h.scrollIntoView({ behavior: 'smooth', block: 'start' }); return; }
+    if (toc) {
+      e.preventDefault();
+      const h = document.getElementById(toc.dataset.toc);
+      if (isMobile()) $('#toc-wrap').open = false;
+      if (h) h.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      return;
+    }
+    const mdLink = e.target.closest('#md a[href$=".md"]');
+    if (mdLink) {   // enlaces entre documentos: se abren dentro de la app
+      e.preventDefault();
+      const file = mdLink.getAttribute('href').split('/').pop();
+      if (['rag-hibrido-guia.md', 'REVISION.md'].includes(file)) { loadDoc(file); window.scrollTo(0, 0); }
+      return;
+    }
+    const sheet = e.target.closest('#step-sheet');
+    if (sheet && e.target === sheet) { sheet.close(); return; }   // clic en el fondo de la hoja
     const bg = e.target.closest('[data-bg]');
     if (bg) { bgAction(bg.dataset.bg, bg); return; }
     const q = e.target.closest('[data-sz-q]');
@@ -1062,5 +1143,38 @@
   // ================================================================ arranque
   initLab();
   initBG();
+  $('#toc-wrap').open = !isMobile();
   route();
+
+  // al cruzar el punto de corte (rotar el teléfono, redimensionar) se re-dibuja la vista actual
+  mq.addEventListener('change', () => { $('#toc-wrap').open = !isMobile(); route(); });
+
+  // la cabecera de progreso se pega justo debajo de la barra superior, mida lo que mida
+  const syncTopbar = () => document.documentElement.style.setProperty('--topbar-h', $('.topbar').offsetHeight + 'px');
+  syncTopbar();
+  window.addEventListener('resize', syncTopbar);
+
+  // instalación como app
+  let installEvt = null;
+  const installBtn = $('#install-btn');
+  const isStandalone = window.matchMedia('(display-mode: standalone)').matches || navigator.standalone;
+  const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent);
+  window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); installEvt = e; installBtn.hidden = false; });
+  if (isIOS && !isStandalone) installBtn.hidden = false;
+  installBtn.addEventListener('click', async () => {
+    if (installEvt) {
+      installEvt.prompt();
+      await installEvt.userChoice.catch(() => null);
+      installEvt = null;
+      installBtn.hidden = true;
+    } else {
+      toast('En Safari: toca Compartir y luego "Agregar a inicio"');
+    }
+  });
+  window.addEventListener('appinstalled', () => { installBtn.hidden = true; toast('App instalada'); });
+
+  // uso sin conexión (no disponible en todos los contextos: se ignora si falla)
+  if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)) {
+    window.addEventListener('load', () => { navigator.serviceWorker.register('sw.js').catch(() => {}); });
+  }
 })();
