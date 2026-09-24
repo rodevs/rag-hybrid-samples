@@ -8,9 +8,11 @@ Todo el comportamiento es **simulado y determinista**: no hay llamadas a modelos
 | Sección de la web | Qué se puede hacer |
 |---|---|
 | **Inicio** | Página principal: qué aprenderás en cada fase, las 13 etapas con lo que enseña cada una, y sistemas reales (Qdrant, OpenSearch, Elasticsearch, Weaviate, Milvus, Vespa, pgvector, Azure AI Search, Pinecone, modelos y frameworks) que implementan esas técnicas, con enlaces a la etapa correspondiente. Si ya empezaste, ofrece continuar donde te quedaste. |
-| **Recorrido** | Las 13 etapas del pipeline, de la indexación a la verificación de citas. Cada etapa muestra qué entra, qué sale, qué se guarda y qué cambia en producción. Puedes editar el corpus, el chunking, el modelo de embeddings, la pregunta, el modo de búsqueda, `k` de RRF, el umbral de rerank y simular una alucinación. |
-| **Reindexado blue-green** | Crear `docs_v2`, reindexar desde S3, ingerir un documento durante el reindexado (dual-write / catch-up), evaluar ambas colecciones y cambiar el alias. El tráfico de consultas muestra qué colección responde y qué pasa si el modelo de la API no coincide con el de la colección. |
-| **Dimensionamiento** | Calculadora de RAM/disco para un índice HNSW según fragmentos, dimensiones, cuantización y `m`. |
+| **Recorrido** | 15 pasos, del problema (un modelo sin RAG inventa; con RAG cita) hasta el resumen de tu pregunta. Cada paso tiene cuatro capas: **la idea** en lenguaje simple con una analogía, **míralo** con la visualización, **experimenta** con un reto guiado y un botón que lo aplica, y **en la vida real** (plegada) con herramientas, código y notas de producción. En la fase de consulta, una barra en cada paso permite cambiar la pregunta, el modo de búsqueda y el reranking desde cualquier paso, y un panel compara los tres modos lado a lado. Hay comprobaciones al final de cada fase. |
+| **Glosario** | 37 términos en lenguaje simple, con analogía, equivalentes reales y enlace al paso del lab. Cualquier palabra subrayada en el lab abre su definición. |
+| **Camino avanzado** | Puerta de entrada a reindexado blue-green y dimensionamiento, con los términos que conviene conocer antes. |
+| **Reindexado blue-green** (avanzado) | Explica qué son `docs_v1`, `docs_v2` (colecciones), `docs` (alias) y S3. Crear `docs_v2`, reindexar desde S3, ingerir un documento durante el reindexado (dual-write / catch-up), evaluar ambas colecciones y cambiar el alias. El tráfico de consultas muestra qué colección responde y qué pasa si el modelo de la API no coincide con el de la colección. |
+| **Dimensionamiento** (avanzado) | Calculadora de RAM/disco para un índice HNSW según fragmentos, dimensiones, cuantización y `m`. |
 | **Documentación** | La guía paso a paso y la revisión técnica ([`docs/`](docs/)), renderizadas con índice lateral. |
 
 ## En el teléfono (PWA)
@@ -42,7 +44,7 @@ No hay paso de build ni dependencias de npm. Se cargan desde CDN las fuentes (Go
 
 ```bash
 cd projects/hybrid-rag-guide
-npm test        # equivale a: node --test tests/engine.test.js   (Node 18+)
+npm test        # node --test sobre tests/engine.test.js y tests/learn.test.js (Node 18+)
 ```
 
 Cubren el motor simulado: stemming, chunking, IDs deterministas, paráfrasis vs. código exacto, RRF, "no lo sé" fuera del corpus, cuarentena por prompt injection, verificación de citas, incompatibilidad de dimensiones y dimensionamiento.
@@ -61,11 +63,12 @@ hybrid-rag-guide/
 │       ├── corpus.js       # 8 documentos ficticios, preguntas de ejemplo y golden set
 │       ├── engine.js       # motor RAG simulado (UMD: navegador y Node)
 │       ├── systems.js      # sistemas reales de la portada y a qué etapa enlaza cada concepto
+│       ├── learn.js        # glosario, comprobaciones por fase y respuestas "sin RAG"
 │       └── app.js          # UI: render de etapas, blue-green, dimensionamiento, docs
 ├── docs/
 │   ├── rag-hibrido-guia.md # guía paso a paso (código, Docker, Terraform, CI/CD)
 │   └── REVISION.md         # hallazgos de la revisión técnica
-├── tests/engine.test.js
+├── tests/                  # engine.test.js (motor) y learn.test.js (integridad del contenido didáctico)
 └── package.json
 ```
 

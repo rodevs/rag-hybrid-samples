@@ -1,5 +1,5 @@
 /* Service worker: la app completa funciona sin conexión después de la primera visita. */
-const VERSION = 'rag-lab-v4';
+const VERSION = 'rag-lab-v5';
 const CORE = [
   './',
   './index.html',
@@ -8,6 +8,7 @@ const CORE = [
   './assets/js/corpus.js',
   './assets/js/engine.js',
   './assets/js/systems.js',
+  './assets/js/learn.js',
   './assets/js/app.js',
   './assets/icons/icon.svg',
   './assets/icons/icon-192.png',

@@ -19,7 +19,8 @@
   "shortcuts": [
     { "name": "Qué aprenderás", "url": "./#home" },
     { "name": "Recorrido", "url": "./#lab" },
-    { "name": "Reindexado blue-green", "url": "./#bluegreen" },
+    { "name": "Glosario", "url": "./#glossary" },
+    { "name": "Camino avanzado", "url": "./#advanced" },
     { "name": "Documentación", "url": "./#docs" }
   ]
 }

@@ -3,6 +3,7 @@
   'use strict';
   const E = window.RagEngine;
   const C = window.RagCorpus;
+  const L = window.RagLearn;
 
   // ================================================================ utilidades
   const $ = (sel, root) => (root || document).querySelector(sel);
@@ -31,7 +32,7 @@
   const STORE_KEY = 'rag-lab-v1';
   const saved = (() => { try { return JSON.parse(localStorage.getItem(STORE_KEY)) || {}; } catch (e) { return {}; } })();
   function persist() {
-    try { localStorage.setItem(STORE_KEY, JSON.stringify({ stage: S.stage, visited: [...S.visited], query: S.query })); } catch (e) { /* almacenamiento no disponible */ }
+    try { localStorage.setItem(STORE_KEY, JSON.stringify({ stage: S.stage, visited: [...S.visited], query: S.query, quiz: S.quiz })); } catch (e) { /* almacenamiento no disponible */ }
   }
   // estado abierto/cerrado de los paneles plegables, para que sobreviva a los re-render
   const FOLDS = {};
@@ -51,7 +52,8 @@
       cfg: { name: 'docs_v1', size: 40, overlap: 8, model: 'mock-embed-small' },
       query: C.SAMPLE_QUERIES[0].q,
       opts: Object.assign({}, E.DEFAULTS),
-      stage: 'docs',
+      stage: 'problem',
+      quiz: {},
       docKey: 'vacaciones',
       pointId: null,
       s3Key: null,
@@ -65,6 +67,7 @@
       if (saved.stage && STAGES.some(st => st.id === saved.stage)) S.stage = saved.stage;
       if (Array.isArray(saved.visited)) saved.visited.forEach(v => S.visited.add(v));
       if (typeof saved.query === 'string' && saved.query.trim()) S.query = saved.query;
+      if (saved.quiz && typeof saved.quiz === 'object') S.quiz = saved.quiz;
     }
     rebuild();
   }
@@ -81,66 +84,187 @@
   const selPoint = () => S.index.points.find(p => p.id === S.pointId);
 
   // ================================================================ etapas
+  // Cada etapa se muestra en capas: la idea (lenguaje simple), míralo (visualización),
+  // experimenta (un reto guiado) y en la vida real (herramientas, código y producción).
+  // [[clave]] o [[clave|texto]] en los textos abre el glosario (assets/js/learn.js).
   const STAGES = [
-    { id: 'docs', learn: 'Qué documentos entran al sistema y por qué conviene guardar los originales.', phase: 'index', title: 'Documentos fuente', io: ['PDFs', 'Documentos a indexar'], ref: 'Paso 7',
-      lede: 'Todo empieza con los documentos que el sistema podrá consultar. Activa o desactiva documentos, o agrega uno propio: el índice se reconstruye y todas las etapas se recalculan.',
-      prod: ['Guarda cada original en almacenamiento durable (S3) desde el primer día: es la fuente para reindexar.', 'Usa como doc_id un hash del contenido o un identificador estable del sistema de origen, nunca el nombre del archivo.', 'Valida tipo y tamaño del archivo y exige autenticación para ingerir.'] },
-    { id: 'parse', learn: 'Cómo un PDF se vuelve texto por página y por qué el doc_id es un hash del contenido.', phase: 'index', title: 'Parseo', io: ['PDF', 'Texto por página + doc_id'], ref: 'Paso 5',
-      lede: 'El PDF se convierte en texto, página por página. Se conserva el número de página para poder citar después, y el doc_id se calcula a partir del contenido.',
-      prod: ['pypdf no hace OCR: un PDF escaneado devuelve texto vacío.', 'Registra qué parser y versión se usó; cambiarlo obliga a reindexar.', 'Guarda el texto extraído junto al original para reindexar sin volver a parsear.'] },
-    { id: 'chunk', learn: 'Cómo el tamaño y el traslape de los fragmentos cambian lo que se puede encontrar.', phase: 'index', title: 'Chunking', io: ['Texto por página', 'Fragmentos con página'], ref: 'Paso 5',
-      lede: 'Cada página se corta en fragmentos de N palabras con un traslape para no partir ideas a la mitad. Un fragmento nunca cruza de una página a otra.',
-      prod: ['Los modelos miden en tokens: en español una palabra equivale a 1.3–1.6 tokens aprox.', 'Cortar por estructura (títulos, párrafos) suele funcionar mejor que cortar cada N palabras.', 'Cambiar tamaño o traslape cambia todos los fragmentos: requiere un reindexado blue-green.'] },
-    { id: 'embed', learn: 'Qué es un embedding, qué es un vector sparse y por qué se guardan los dos.', phase: 'index', title: 'Embeddings', io: ['Fragmento', 'Vector denso + vector sparse'], ref: 'Paso -1',
-      lede: 'Cada fragmento se guarda con dos vectores en el mismo punto de Qdrant: "dense", que captura el significado, y "bm25", un vector sparse con los términos exactos y su frecuencia (lo genera fastembed con el modelo Qdrant/bm25, localmente y sin costo).',
-      prod: ['Envía los textos a la API de embeddings en lotes y con reintentos.', 'El vector sparse usa una longitud promedio fija: depende solo de su chunk y no hay que recalcularlo cuando llegan documentos nuevos.', 'Guarda en el payload qué modelo generó el vector.', 'Si cambias de modelo, los vectores viejos y nuevos no son comparables.'] },
-    { id: 'store', learn: 'Qué queda guardado en Qdrant y en S3, y para qué sirve el alias.', phase: 'index', title: 'Almacenamiento', io: ['Vectores + metadata', 'Puntos en Qdrant, objetos en S3'], ref: 'Paso 11',
-      lede: 'La ingesta escribe en dos lugares. S3 guarda el original y el texto extraído. Qdrant guarda un punto por fragmento con dos vectores con nombre (dense y bm25) y un payload con texto y metadata. BM25 no es un índice aparte: vive en la misma colección. La API consulta siempre el alias docs, nunca la colección física.',
-      prod: ['IDs deterministas (uuid5 de doc_id:chunk_index): reingestar sobrescribe en vez de duplicar.', 'Crea índices de payload para doc_id y chunk_index (filtros y borrados).', 'Crea la colección versionada y su alias desde el primer día.'] },
-    { id: 'question', learn: 'Cómo se normaliza una pregunta: acentos, palabras vacías y stemming.', phase: 'query', title: 'Pregunta', io: ['Texto de la persona', 'Términos normalizados'], ref: 'Paso 12',
-      lede: 'La pregunta pasa por la misma normalización que los documentos: minúsculas, sin acentos, sin palabras vacías y con stemming. Elige un ejemplo o escribe tu propia pregunta.',
-      prod: ['El filtro por tenant_id sale del token del usuario, nunca del cuerpo de la petición.', 'Aplica límites de peticiones por usuario.'] },
-    { id: 'qembed', learn: 'Cómo la pregunta cae cerca de los fragmentos con significado parecido.', phase: 'query', title: 'Embedding de la pregunta', io: ['Pregunta', 'Vector de la pregunta'], ref: 'Paso -1',
-      lede: 'La pregunta se convierte en vector con el mismo modelo que se usó al indexar. En el mapa, la pregunta cae cerca de los fragmentos con significado parecido.',
-      prod: ['El modelo de la pregunta debe ser el mismo de la colección. Si cambias de modelo, cambia ambos a la vez (ver Reindexado blue-green).', 'Es un costo pequeño pero recurrente: uno por pregunta.'] },
-    { id: 'dense', learn: 'Por qué la búsqueda por significado entiende paráfrasis y falla con folios.', phase: 'query', title: 'Búsqueda densa', io: ['Vector de la pregunta', 'Top-N por similitud coseno'], ref: 'Paso 6',
-      lede: 'Busca los fragmentos cuyo vector apunta en la dirección más parecida a la del vector de la pregunta (similitud coseno). Entiende paráfrasis, pero es débil con códigos y folios.',
-      prod: ['Es el prefetch "dense" de la llamada híbrida a Qdrant (ver etapa Fusión RRF).', 'Con millones de vectores se usa un índice aproximado (HNSW): muy rápido a cambio de una pérdida mínima de precisión.', 'El filtro por tenant va dentro del prefetch.'] },
-    { id: 'bm25', learn: 'Por qué los términos raros pesan más y cómo Qdrant aplica el IDF.', phase: 'query', title: 'BM25 en Qdrant', io: ['Términos de la pregunta', 'Top-N por coincidencia exacta'], ref: 'Paso 6',
-      lede: 'BM25 puntúa coincidencias exactas de términos. Corre dentro de Qdrant sobre el vector sparse "bm25": la frecuencia de cada término se guardó al indexar y Qdrant multiplica por el IDF, que calcula con las estadísticas de la colección (Modifier.IDF). Los términos raros, como un folio, pesan más.',
-      prod: ['Es el prefetch "bm25" de la misma llamada que la búsqueda densa.', 'Configura el analizador para español (stemming y palabras vacías).', 'OpenSearch solo si ya lo operas o necesitas sinónimos y diccionarios de dominio.'] },
-    { id: 'rrf', learn: 'Cómo se fusionan dos rankings sin comparar sus scores, en una sola llamada.', phase: 'query', title: 'Fusión RRF en Qdrant', io: ['Dos prefetch (dense y bm25)', 'Una lista fusionada'], ref: 'Paso 6',
-      lede: 'Qdrant combina las dos listas en el servidor usando solo la posición: cada fragmento suma 1/(k + posición) por cada lista donde aparece. Así no hay que comparar scores de escalas distintas. Búsqueda densa, BM25 y fusión son una sola llamada a la Query API.',
-      prod: ['k = 60 es el valor típico; revisa qué constante usa tu versión de Qdrant y si permite ajustarla.', 'Si necesitas otro k, pide las dos listas por separado y fusiona en tu código.'] },
-    { id: 'rerank', learn: 'Cómo se descartan candidatos y cuándo es mejor decir "no lo sé".', phase: 'query', title: 'Reranking', io: ['Candidatos fusionados', 'Top-K sobre el umbral'], ref: 'Paso 6',
-      lede: 'Un cross-encoder lee la pregunta y cada candidato juntos y les asigna un score de relevancia. Es más preciso y más caro, por eso solo reordena los candidatos ya fusionados. Lo que queda bajo el umbral no llega al LLM.',
-      prod: ['Calibra el umbral con el golden set.', 'Si ningún candidato supera el umbral, responde "no lo sé" sin llamar al LLM.'] },
-    { id: 'generate', learn: 'Cómo se arma el prompt con citas y qué hacer con instrucciones escondidas.', phase: 'query', title: 'Generación', io: ['Pregunta + Top-K', 'Respuesta con citas [n]'], ref: 'Paso 7',
-      lede: 'El LLM recibe instrucciones, la pregunta y los fragmentos numerados. Debe responder solo con ese contexto y citar cada afirmación. Aquí el LLM es simulado: extrae las oraciones más relevantes.',
-      prod: ['Delimita el contexto y trata su contenido como datos, no como instrucciones.', 'Un fragmento con instrucciones embebidas se pone en cuarentena.', 'El LLM suele ser el costo dominante por consulta.'] },
-    { id: 'verify', learn: 'Cómo comprobar que cada cita exista y respalde lo que dice la respuesta.', phase: 'query', title: 'Verificación de citas', io: ['Respuesta + fragmentos', 'Citas validadas'], ref: 'Paso 7',
-      lede: 'Antes de mostrar la respuesta se comprueba que cada cita exista y que la oración esté respaldada por el fragmento citado.',
-      prod: ['Define qué hacer si falla: reintentar, quitar la oración o marcar baja confianza.', 'Mide la tasa de citas inválidas como métrica de calidad.'] },
+    { id: 'problem', phase: 'intro', title: 'El problema: un modelo sin tus documentos', ref: 'Paso -1',
+      learn: 'Por qué un modelo de lenguaje inventa respuestas y cómo RAG lo evita.',
+      io: ['Una pregunta', 'Dos respuestas: sin RAG y con RAG'],
+      idea: 'Un [[llm]] solo sabe lo que aprendió en su entrenamiento: no conoce los documentos de tu empresa. Si le preguntas algo de ellos, puede inventar una respuesta que suena segura (una [[alucinacion]]). Un sistema [[rag]] primero busca en tus documentos y le da al modelo solo lo relevante, para que responda con fuentes.',
+      analogy: 'Es la diferencia entre contestar un examen de memoria y contestarlo a libro abierto.',
+      tools: 'El modelo puede ser GPT, Claude o un modelo abierto. Todo el recorrido explica cómo se construye la búsqueda que lo alimenta.',
+      prod: ['Nunca confíes en una respuesta sin fuente cuando se trata de información interna.', 'Un buen RAG también sabe decir "no lo sé" cuando sus documentos no cubren la pregunta.'] },
+    { id: 'docs', phase: 'index', title: 'Los documentos', ref: 'Paso 7',
+      learn: 'Qué documentos entran al sistema y por qué conviene guardar los originales.',
+      io: ['Archivos PDF', 'Documentos listos para procesar'],
+      idea: 'Todo empieza con el [[corpus]]: los documentos que el sistema podrá consultar. Aquí hay 8 documentos ficticios de una empresa (políticas, facturas, manuales). Puedes apagar alguno o agregar uno tuyo y verás cómo cambia todo lo demás.',
+      analogy: 'Es la biblioteca del sistema: si un libro no está en el estante, nadie lo podrá consultar.',
+      tools: 'En producción los documentos llegan por una API de carga y los originales se guardan en un almacén de archivos como [[s3]].',
+      prod: ['Guarda cada original en un almacén durable ([[s3]] o similar) desde el primer día: es la fuente para volver a indexar.', 'Usa como identificador un [[hash]] del contenido o un ID estable del sistema de origen, nunca el nombre del archivo.', 'Valida tipo y tamaño del archivo y exige autenticación para subir documentos.'] },
+    { id: 'parse', phase: 'index', title: 'Leer el PDF (parseo)', ref: 'Paso 5',
+      learn: 'Cómo un PDF se vuelve texto por página y por qué el identificador es un hash del contenido.',
+      io: ['PDF', 'Texto por página + identificador'],
+      idea: 'El [[parser|parseo]] convierte cada PDF en texto, página por página, y guarda el número de página para poder citarla después. También calcula un [[hash]] del contenido que sirve como identificador del documento.',
+      analogy: 'Como transcribir un documento en papel anotando en qué página estaba cada párrafo.',
+      tools: 'Parsers reales: pypdf, Unstructured, Docling o Amazon Textract. El original y el texto extraído se guardan en [[s3]].',
+      prod: ['pypdf no hace OCR: un PDF escaneado devuelve texto vacío.', 'Registra qué parser y versión se usó; cambiarlo obliga a volver a indexar.', 'Guarda el texto extraído junto al original para no parsear de nuevo.'] },
+    { id: 'chunk', phase: 'index', title: 'Partir en fragmentos', ref: 'Paso 5',
+      learn: 'Cómo el tamaño y el traslape de los fragmentos cambian lo que se puede encontrar.',
+      io: ['Texto por página', 'Fragmentos con su página'],
+      idea: 'Un documento completo es demasiado grande para buscar en él y para dárselo al modelo. Por eso se parte en [[chunk|fragmentos]] de N palabras, con un [[traslape]] para no cortar ideas a la mitad.',
+      analogy: 'Como hacer fichas de estudio a partir de un libro: cada ficha trata una sola idea.',
+      tools: 'Los modelos miden el texto en [[token|tokens]]. En producción se suele cortar por párrafos o títulos en lugar de cada N palabras.',
+      prod: ['En español una palabra equivale a 1.3–1.6 tokens aproximadamente.', 'Cambiar tamaño o traslape cambia todos los fragmentos: requiere un reindexado [[bluegreen|blue-green]].'] },
+    { id: 'embed', phase: 'index', title: 'Convertir texto en números', ref: 'Paso -1',
+      learn: 'Qué es un embedding, qué es un vector sparse y por qué se guardan los dos.',
+      io: ['Fragmento de texto', 'Dos vectores por fragmento'],
+      idea: 'Para comparar significados, cada fragmento se convierte en un [[embedding]]: un [[vector]] de números. Textos que dicen lo mismo con otras palabras quedan cerca. Además se guarda un [[sparse|vector sparse]] con las palabras exactas, que usará [[bm25|BM25]].',
+      analogy: 'Es como ubicar cada texto en un mapa: los que hablan de lo mismo quedan en el mismo barrio.',
+      tools: 'Modelos reales: OpenAI text-embedding-3, BGE-M3 o e5, con cientos o miles de [[dimension|dimensiones]]. El vector sparse lo genera fastembed.',
+      prod: ['Envía los textos a la API de embeddings en lotes y con reintentos.', 'Guarda en el [[payload]] qué modelo generó el vector.', 'Si cambias de modelo, los vectores viejos y nuevos no son comparables.'] },
+    { id: 'store', phase: 'index', title: 'Dónde se guarda todo', ref: 'Paso 11',
+      learn: 'Qué queda guardado en la base de vectores y en el almacén de originales, y para qué sirve el alias.',
+      io: ['Vectores + texto + metadata', 'Puntos en Qdrant, archivos en S3'],
+      idea: 'Se guarda en dos lugares. El almacén de originales ([[s3]]) guarda el PDF y su texto. La base de vectores ([[qdrant]]) guarda un [[punto]] por fragmento: sus dos vectores y un [[payload]] con el texto y la página. Los puntos viven en una [[coleccion|colección]] (docs_v1) que la aplicación consulta a través de un [[alias]] (docs).',
+      analogy: 'El archivero guarda los documentos originales; el fichero de tarjetas es lo que se consulta todos los días.',
+      tools: 'Qdrant es open source y puedes correrlo en tu servidor. Alternativas: pgvector, OpenSearch, Weaviate. Para archivos: S3, MinIO o una carpeta.',
+      prod: ['IDs de punto deterministas: volver a subir un documento sobrescribe en vez de duplicar.', 'Crea la colección versionada y su [[alias]] desde el primer día.'] },
+    { id: 'question', phase: 'query', title: 'La pregunta', ref: 'Paso 12',
+      learn: 'Cómo se limpia una pregunta: acentos, palabras vacías y stemming.',
+      io: ['Lo que escribes', 'Palabras clave normalizadas'],
+      idea: 'Empieza la consulta. Tu pregunta pasa por la misma limpieza que los documentos: minúsculas, sin acentos y con [[stemming|stemming]], para que "vacaciones" y "vacación" coincidan. Elige un ejemplo o escribe la tuya; la puedes cambiar en cualquier paso desde la barra oscura.',
+      analogy: 'Como subrayar las palabras importantes de una pregunta antes de buscar.',
+      tools: 'En producción aquí también se identifica al usuario y su [[tenant]] para filtrar sus documentos.',
+      prod: ['El filtro por cliente sale del usuario autenticado, nunca de lo que envía el navegador.', 'Aplica límites de peticiones por usuario.'] },
+    { id: 'qembed', phase: 'query', title: 'La pregunta también se vuelve vector', ref: 'Paso -1',
+      learn: 'Cómo la pregunta cae cerca de los fragmentos con significado parecido.',
+      io: ['Pregunta', 'Vector de la pregunta'],
+      idea: 'La pregunta se convierte en [[embedding]] con el mismo modelo que los documentos. Así cae en el mismo mapa de significados, cerca de los fragmentos que hablan de lo mismo.',
+      analogy: 'Ubicar tu pregunta en el mismo mapa para ver qué tiene cerca.',
+      tools: 'Debe usarse exactamente el mismo modelo que al indexar: con otro modelo los números no son comparables.',
+      prod: ['Si cambias de modelo, cambia el de las preguntas y el de la colección al mismo tiempo (ver el camino avanzado).'] },
+    { id: 'dense', phase: 'query', title: 'Búsqueda por significado', ref: 'Paso 6',
+      learn: 'Por qué la búsqueda por significado entiende paráfrasis y falla con folios.',
+      io: ['Vector de la pregunta', 'Los fragmentos más parecidos'],
+      idea: 'La [[densa|búsqueda densa]] trae los fragmentos cuyo vector se parece más al de la pregunta, medido con [[coseno|similitud coseno]]. Entiende sinónimos, pero le cuesta distinguir códigos exactos como un folio.',
+      analogy: 'Buscar por tema: encuentra "asueto" aunque el documento diga "vacaciones".',
+      tools: 'Con millones de vectores se usa un índice [[hnsw|HNSW]]. En Qdrant esta búsqueda es uno de los dos [[prefetch]] de una sola llamada.',
+      prod: ['El filtro por [[tenant]] va dentro de la búsqueda.'] },
+    { id: 'bm25', phase: 'query', title: 'Búsqueda por palabras exactas', ref: 'Paso 6',
+      learn: 'Por qué las palabras raras pesan más y cómo se calcula BM25.',
+      io: ['Palabras de la pregunta', 'Los fragmentos que las contienen'],
+      idea: '[[bm25|BM25]] trae los fragmentos que contienen las palabras exactas de la pregunta. Las palabras raras pesan más gracias al [[idf|IDF]]: un folio que aparece una sola vez vale mucho más que "factura".',
+      analogy: 'El buscador clásico: si la palabra no está, no la encuentra; si es un código, no se equivoca.',
+      tools: 'En Qdrant, BM25 corre sobre el [[sparse|vector sparse]] guardado y es el otro [[prefetch]] de la misma llamada. OpenSearch y Elasticsearch lo traen por defecto.',
+      prod: ['Configura el analizador para español (stemming y palabras vacías).'] },
+    { id: 'rrf', phase: 'query', title: 'Juntar las dos búsquedas', ref: 'Paso 6',
+      learn: 'Cómo se combinan dos rankings sin comparar sus puntajes.',
+      io: ['Dos listas ordenadas', 'Una sola lista'],
+      idea: 'Ahora hay dos listas: una por significado y otra por palabras. [[rrf|RRF]] las combina en una sola usando solo la posición de cada fragmento en cada lista. Un fragmento que sale arriba en las dos gana.',
+      analogy: 'Juntar dos rankings de restaurantes: el que aparece bien calificado en ambos queda primero.',
+      tools: 'Qdrant hace esta fusión en el servidor, en la misma llamada que las dos búsquedas.',
+      prod: ['k = 60 es el valor típico; revisa qué constante usa tu versión de Qdrant y si permite ajustarla.'] },
+    { id: 'rerank', phase: 'query', title: 'El filtro fino (reranking)', ref: 'Paso 6',
+      learn: 'Cómo se descartan candidatos y cuándo es mejor decir "no lo sé".',
+      io: ['Candidatos de la fusión', 'Los que superan el umbral'],
+      idea: 'Un [[rerank|reranker]] lee la pregunta junto con cada candidato y le pone una calificación más precisa. Solo los que superan el [[umbral]] llegan al modelo. Si ninguno lo supera, el sistema dice "no lo sé".',
+      analogy: 'La entrevista final: de los currículums preseleccionados solo pasan los que de verdad encajan.',
+      tools: 'Rerankers reales: Cohere Rerank o bge-reranker (abierto).',
+      prod: ['Calibra el umbral con un [[golden]].', 'Si ningún candidato lo supera, responde "no lo sé" sin llamar al modelo.'] },
+    { id: 'generate', phase: 'query', title: 'Generar la respuesta', ref: 'Paso 7',
+      learn: 'Cómo se arma el prompt con citas y qué hacer con instrucciones escondidas.',
+      io: ['Pregunta + fragmentos elegidos', 'Respuesta con citas'],
+      idea: 'El [[llm|modelo]] recibe un [[prompt]] con instrucciones, tu pregunta y los fragmentos numerados. Debe responder solo con eso y poner una [[cita]] en cada afirmación. Si un fragmento trae órdenes escondidas ([[injection|prompt injection]]), se aparta.',
+      analogy: 'Pedirle a alguien que responda usando solo las fichas que le diste y que diga de cuál sacó cada dato.',
+      tools: 'Aquí el modelo es simulado; en producción sería GPT, Claude o un modelo abierto.',
+      prod: ['Delimita el contexto y trátalo como datos, no como instrucciones.', 'El modelo suele ser el costo más alto por consulta.'] },
+    { id: 'verify', phase: 'query', title: 'Comprobar las citas', ref: 'Paso 7',
+      learn: 'Cómo comprobar que cada cita exista y respalde lo que dice la respuesta.',
+      io: ['Respuesta + fragmentos', 'Citas comprobadas'],
+      idea: 'Antes de mostrar la respuesta se revisa que cada [[cita]] apunte a un fragmento real y que lo que dice la oración esté en ese fragmento. Así se detectan [[alucinacion|alucinaciones]].',
+      analogy: 'Revisar la bibliografía de un trabajo: que cada fuente exista y diga lo que se afirma.',
+      tools: 'En producción la tasa de citas inválidas se mide como métrica de calidad, junto con herramientas como Ragas.',
+      prod: ['Define qué hacer si falla: reintentar, quitar la oración o marcar baja confianza.'] },
+    { id: 'summary', phase: 'close', title: 'Lo que le pasó a tu pregunta', ref: 'Paso 9',
+      learn: 'El recorrido completo de tu pregunta y cómo cambia con cada modo de búsqueda.',
+      io: ['Todo lo anterior', 'Tu resumen'],
+      idea: 'Este es el recorrido completo de tu pregunta, de principio a fin. Abajo puedes comparar qué habría pasado con cada modo de búsqueda sin regresar a ningún paso, y comprobar lo que aprendiste.',
+      analogy: '',
+      tools: 'Para operar esto en producción sigue el camino avanzado: reindexado sin interrupciones y memoria del índice.',
+      prod: ['Mide cualquier cambio con un [[golden]] antes de llevarlo a producción.'] },
   ];
   const stageIdx = id => STAGES.findIndex(s => s.id === id);
+  const PHASE_LABEL = { intro: 'Introducción', index: 'Fase 1 · Indexación', query: 'Fase 2 · Consulta', close: 'Cierre' };
+
+  // retos "Experimenta": una acción opcional que cambia el estado y lo que deberías observar
+  const setSample = id => { S.query = C.SAMPLE_QUERIES.find(s => s.id === id).q; };
+  const CHALLENGES = {
+    problem: { task: 'Elige la pregunta del folio y compara: sin RAG el modelo inventa un total; con RAG da el monto real y cita la factura.',
+      action: { label: 'Usar la pregunta del folio', run: () => setSample('codigo') },
+      expect: 'Sin RAG: un total inventado y sin fuente. Con RAG: "total 48,300.00 MXN" con la cita [1] de la factura F-2024-0117.' },
+    docs: { task: 'Apaga la "Política de vacaciones" y después revisa el último paso con la pregunta del asueto.',
+      action: { label: 'Apagar la política de vacaciones', run: () => { const d = docByKey(S.docs, 'vacaciones'); if (d) d.enabled = false; if (S.docKey === 'vacaciones') S.docKey = 'vpn'; setSample('parafrasis'); } },
+      expect: 'Sin ese documento no hay nada relevante y el sistema responde "no lo sé". Vuelve a activarlo con la casilla "Indexar".' },
+    parse: { task: 'Compara el identificador de las dos facturas (F17 y F98).',
+      action: { label: 'Ver la factura F-2024-0098', run: () => { S.docKey = 'factura-0098'; } },
+      expect: 'Aunque los documentos se parecen mucho, sus identificadores son totalmente distintos: el [[hash]] cambia con cualquier diferencia en el contenido.' },
+    chunk: { task: 'Pon el traslape en 0 y busca una frase que quede partida entre dos colores.',
+      action: { label: 'Poner el traslape en 0', run: () => { S.cfg.overlap = 0; } },
+      expect: 'Sin traslape, una frase del borde queda mitad en un fragmento y mitad en otro. Con traslape, las palabras rayadas aparecen en los dos.' },
+    embed: { task: 'Compara "el gato duerme en el sofá" con "la factura vence en mayo".',
+      action: { label: 'Probar esa comparación', run: () => { S.simA = 'el gato duerme en el sofá'; S.simB = 'la factura vence en mayo'; } },
+      expect: 'La similitud cae cerca de 0 porque no comparten significado. Con "el felino descansa en el mueble" sube aunque no comparten ninguna palabra.' },
+    store: { task: 'Toca una fila de la tabla de puntos y encuentra su texto y su página.',
+      expect: 'Cada [[punto]] guarda en su [[payload]] el texto del fragmento, la página y el documento. Eso es lo que permite citar "pág. 2" al final.' },
+    question: { task: 'Elige la pregunta del folio y mira qué pasa con "F-2024-0117".',
+      action: { label: 'Usar la pregunta del folio', run: () => setSample('codigo') },
+      expect: 'El folio queda como un solo término, completo; palabras como "de" y "la" se descartan.' },
+    qembed: { task: 'Con la pregunta del folio, busca el aviso "Palabras que el modelo no entiende".',
+      action: { label: 'Usar la pregunta del folio', run: () => setSample('codigo') },
+      expect: 'El folio no tiene significado para el modelo, así que casi no mueve el vector. Por eso la búsqueda por significado no lo distingue.' },
+    dense: { task: 'Con la pregunta del folio, compara los puntajes de las dos facturas.',
+      action: { label: 'Usar la pregunta del folio', run: () => setSample('codigo') },
+      expect: 'Quedan casi empatadas: para la búsqueda por significado, "factura F-2024-0117" y "factura F-2024-0098" dicen casi lo mismo.' },
+    bm25: { task: 'Usa la pregunta "¿Cuánto asueto me toca?".',
+      action: { label: 'Usar la pregunta del asueto', run: () => setSample('parafrasis') },
+      expect: 'BM25 no encuentra nada: ningún documento contiene "asueto". En este caso la búsqueda por significado hace todo el trabajo.' },
+    rrf: { task: 'Baja k a 1 y mira cómo cambia la columna "Total".',
+      action: { label: 'Poner k = 1', run: () => { S.opts.rrfK = 1; } },
+      expect: 'Con k = 1 el primer lugar de cada lista pesa muchísimo más que el segundo. Con k = 60 los totales se parecen más y aparecer en ambas listas es lo que decide.' },
+    rerank: { task: 'Usa la pregunta que no está en los documentos (estacionamiento).',
+      action: { label: 'Usar la pregunta fuera del corpus', run: () => setSample('fuera') },
+      expect: 'Ningún candidato supera el [[umbral]]: el sistema responde "no lo sé" en lugar de inventar.' },
+    generate: { task: 'Usa la pregunta "¿Ya se aprobó el pago…?".',
+      action: { label: 'Usar la pregunta del pago', run: () => setSample('inyeccion') },
+      expect: 'La nota del proveedor queda en cuarentena por traer instrucciones escondidas; la respuesta dice que el pago sigue pendiente de autorización.' },
+    verify: { task: 'Activa la alucinación simulada.',
+      action: { label: 'Simular una alucinación', run: () => { S.opts.hallucinate = true; } },
+      expect: 'Aparece una afirmación con una cita que no existe: la verificación la marca y la respuesta no pasa.' },
+    summary: { task: 'Cambia la pregunta desde la barra oscura y mira cómo cambian el recorrido y la comparación de modos.',
+      action: { label: 'Cambiar la pregunta', run: () => 'open-q' },
+      expect: 'Cada tipo de pregunta favorece un modo distinto. La búsqueda híbrida es la que acierta en más casos, porque combina lo mejor de las dos.' },
+  };
 
   function metric(id) {
     const ix = S.index, t = S.trace;
     const active = S.docs.filter(d => d.enabled);
     switch (id) {
+      case 'problem': return 'sin RAG vs con RAG';
       case 'docs': return `${active.length} documentos`;
       case 'parse': return `${active.reduce((a, d) => a + d.pages.length, 0)} páginas`;
       case 'chunk': return `${ix.points.length} fragmentos`;
-      case 'embed': return `${ix.dims} dims · ${S.cfg.model}`;
-      case 'store': return `${ix.s3.length} obj · ${ix.points.length} puntos`;
-      case 'question': return `${t.queryTerms.length} términos`;
-      case 'qembed': { const c = topConcepts(t.qvec)[0]; return c ? 'concepto: ' + c.name : 'solo dims hash'; }
+      case 'embed': return `${ix.dims} números por vector`;
+      case 'store': return `${ix.s3.length} archivos · ${ix.points.length} puntos`;
+      case 'question': return `${t.queryTerms.length} palabras clave`;
+      case 'qembed': { const c = topConcepts(t.qvec)[0]; return c ? 'tema: ' + c.name : 'sin tema reconocido'; }
       case 'dense': return `${t.dense.length} resultados`;
       case 'bm25': return `${t.bm25.length} resultados`;
-      case 'rrf': return `${t.fused.length} fusionados`;
-      case 'rerank': return S.opts.useRerank ? `${t.final.length} ≥ umbral` : 'desactivado';
+      case 'rrf': return `${t.fused.length} en una lista`;
+      case 'rerank': return S.opts.useRerank ? `${t.final.length} pasan el filtro` : 'desactivado';
       case 'generate': return t.generation.blocked.length ? 'cuarentena: ' + t.generation.blocked.length : (t.generation.answer === E.NO_ANSWER ? '"no lo sé"' : 'respuesta lista');
       case 'verify': return t.verification.noAnswer ? 'sin citas' : (t.verification.ok ? 'citas válidas' : 'revisar citas');
+      case 'summary': { const q = L.QUIZZES.query; const ok = q.filter(x => S.quiz[x.id] === x.answer).length; return `${ok}/${q.length} correctas`; }
       default: return '';
     }
   }
@@ -154,6 +278,8 @@
       return `<button class="${cls}" data-stage="${st.id}"${cur}><span class="node-n">${i}</span><span class="node-t">${esc(st.title)}</span><span class="node-m">${esc(metric(st.id))}</span></button>`;
     };
     const idx = STAGES.filter(s => s.phase === 'index');
+    const intro = STAGES.filter(s => s.phase === 'intro');
+    const close = STAGES.filter(s => s.phase === 'close');
     const q = STAGES.filter(s => s.phase === 'query');
     const io = {
       parse: 'Escribe original y texto extraído en S3',
@@ -166,21 +292,23 @@
     }[S.stage] || '';
     const flow = '<div class="flow" aria-hidden="true"></div>';
     const html = `
+      <div class="map-phase"><span class="label">Introducción</span>${intro.map(s => node(s)).join(flow)}</div>
       <div class="map-phase"><span class="label">Fase 1 · Indexación</span>${idx.map(s => node(s)).join(flow)}</div>
       <div class="map-phase"><span class="label">Almacenamiento</span>
         <div class="storebox ${io ? 'active' : ''}">
-          <button class="db" data-stage="store"><b>S3</b><span>rag-docs/</span><span class="m">${S.index.s3.length} objetos</span></button>
-          <button class="db" data-stage="store"><b>Qdrant</b><span>alias docs → ${esc(S.cfg.name)}</span><span class="m">${S.index.points.length} puntos · ${S.index.dims} dims</span></button>
+          <button class="db" data-stage="store"><b>S3</b><span>almacén de originales</span><span class="m">${S.index.s3.length} archivos</span></button>
+          <button class="db" data-stage="store"><b>Qdrant</b><span>base de vectores · docs → ${esc(S.cfg.name)}</span><span class="m">${S.index.points.length} puntos · ${S.index.dims} dims</span></button>
           <p class="io">${esc(io)}</p>
         </div>
       </div>
       <div class="map-phase"><span class="label">Fase 2 · Consulta</span>
         ${node(q[0])}${flow}${node(q[1])}${flow}
-        <div class="qcall"><span class="label">Qdrant · una llamada a la Query API</span>
+        <div class="qcall"><span class="label">Qdrant · una sola llamada</span>
           <div class="node-pair">${node(q[2], 'dense')}${node(q[3], 'sparse')}</div>${node(q[4])}
         </div>${flow}
         ${q.slice(5).map(s => node(s)).join(flow)}
-      </div>`;
+      </div>
+      <div class="map-phase"><span class="label">Cierre</span>${close.map(s => node(s)).join(flow)}</div>`;
     $('#map').innerHTML = html;
     $('#map-sheet').innerHTML = html;
   }
@@ -261,17 +389,36 @@
     };
     const json = fmt(req, 0);
     const note = S.opts.mode === 'hybrid'
-      ? 'Los dos <code>prefetch</code> corren dentro de Qdrant (etapas 8 y 9) y <code>{"fusion": "rrf"}</code> los fusiona (etapa 10). El filtro de tenant va en cada prefetch.'
+      ? `Los dos <code>prefetch</code> corren dentro de Qdrant (pasos ${stageIdx('dense') + 1} y ${stageIdx('bm25') + 1}) y <code>{"fusion": "rrf"}</code> los fusiona (paso ${stageIdx('rrf') + 1}). El filtro de tenant va en cada prefetch.`
       : `Modo ${esc(modeName(S.opts.mode))}: una sola búsqueda con <code>using: "${S.opts.mode}"</code>, sin fusión.`;
     return `<pre class="code">POST /collections/docs/points/query\n${esc(json)}</pre><p class="panel-note">${note}</p>`;
   }
-  const qdrantHint = () => `<div class="callout info"><span>Esta búsqueda no es un servicio aparte: es un <code>prefetch</code> de la llamada híbrida a Qdrant.</span><button class="btn small" data-stage="rrf" style="justify-self:start">Ver la llamada completa</button></div>`;
+  // [[clave]] o [[clave|texto]] → botón que abre el glosario
+  // dentro de una oración el término se lee natural: sin paréntesis y en minúscula (salvo siglas y Qdrant)
+  const inlineTerm = t => {
+    t = t.replace(/\s*\(.*\)$/, '');
+    return /^Qdrant/.test(t) || /^[A-Z0-9]{2}/.test(t) ? t : t[0].toLowerCase() + t.slice(1);
+  };
+  const rich = str => esc(str).replace(/\[\[([a-z0-9]+)(?:\|([^\]]+))?\]\]/g, (m, key, label) => {
+    const g = L.GLOSSARY[key];
+    return g ? `<button type="button" class="term" data-term="${key}">${label || esc(inlineTerm(g.term))}</button>` : (label || key);
+  });
+  // durante el render de una etapa, los paneles técnicos se mueven a la capa "En la vida real"
+  let RCTX = null;
+  const REAL_TITLES = new Set(['Salida: objetos en S3', 'Texto extraído (JSON)', 'Qdrant · configuración de la colección', 'Punto seleccionado',
+    'La llamada a Qdrant', 'Por qué BM25 vive en Qdrant', 'Límite de cada búsqueda', 'Modelo de embeddings']);
+  const qdrantHint = () => {
+    const h = `<div class="callout info"><span>Esta búsqueda no es un servicio aparte: es un <code>prefetch</code> de la llamada híbrida a Qdrant.</span><button class="btn small" data-stage="rrf" style="justify-self:start">Ver la llamada completa</button></div>`;
+    if (RCTX) { RCTX.push(h); return ''; }
+    return h;
+  };
   // paneles de detalle: en móvil empiezan plegados para que cada paso quepa sin saturar
   const FOLD_TITLES = new Set(['Agregar un documento', 'Salida: objetos en S3', 'Texto extraído (JSON)', 'Fragmentos resultantes',
     'Qdrant · configuración de la colección', 'Punto seleccionado', 'Peso de cada término (IDF)', 'Por qué BM25 vive en Qdrant',
-    'La llamada a Qdrant', 'Vecinos en el mapa', 'Prompt enviado al LLM', 'Estrategia de búsqueda']);
+    'La llamada a Qdrant', 'Vecinos en el mapa', 'Prompt enviado al LLM', 'Comparar los tres modos']);
   const panel = (title, body, aside) => {
     const head = `<span>${title}</span>${aside ? `<span class="muted num panel-aside">${aside}</span>` : ''}`;
+    if (RCTX && REAL_TITLES.has(title)) { RCTX.push(`<section class="panel"><h3>${head}</h3>${body}</section>`); return ''; }
     if (isMobile() && FOLD_TITLES.has(title)) {
       return `<details class="panel fold" data-fold="${esc(title)}"${foldOpen(title, false)}><summary><h3>${head}</h3></summary>${body}</details>`;
     }
@@ -389,24 +536,113 @@
       <td class="mono">${pt.id.slice(0, 8)}…</td><td>${esc(shortOf(pt.docKey))}</td><td class="n">${pt.payload.page}</td><td class="n">${pt.payload.chunk_index}</td>
       <td>${vecStrip(pt.vector, S.cfg.model, true)}</td><td class="n">${pt.sparse.length}</td></tr>`).join('');
     return `<div class="grid-2">
-      ${panel('S3 · bucket rag-docs', `<div class="table-wrap"><table class="t"><thead><tr><th>Clave</th><th>Tamaño</th></tr></thead><tbody>${ix.s3.map(o => `<tr class="click ${o.key === S.s3Key ? 'sel' : ''}" data-action="pick-s3" data-key="${esc(o.key)}"><td class="mono">${esc(o.key)}</td><td class="n">${bytes(o.bytes)}</td></tr>`).join('')}</tbody></table></div>
+      ${panel('Almacén de originales (S3)', `<div class="table-wrap"><table class="t"><thead><tr><th>Clave</th><th>Tamaño</th></tr></thead><tbody>${ix.s3.map(o => `<tr class="click ${o.key === S.s3Key ? 'sel' : ''}" data-action="pick-s3" data-key="${esc(o.key)}"><td class="mono">${esc(o.key)}</td><td class="n">${bytes(o.bytes)}</td></tr>`).join('')}</tbody></table></div>
         ${obj ? (obj.body ? `<pre class="code wrap">${esc(JSON.stringify(obj.body, null, 2))}</pre>` : `<p class="panel-note">Archivo binario (PDF original). Es la fuente de verdad para reindexar si cambia el parser.</p>`) : '<p class="panel-note">Selecciona un objeto para ver su contenido.</p>'}`, `${ix.s3.length} objetos`)}
       <div style="display:grid;gap:var(--s-4);align-content:start">
-        ${panel('Qdrant · alias', `<div class="table-wrap"><table class="t"><thead><tr><th>Alias</th><th>Colección física</th></tr></thead><tbody><tr><td class="mono">docs</td><td class="mono">${esc(ix.name)}</td></tr></tbody></table></div><p class="panel-note">La API consulta <code>docs</code>. Para reindexar se construye otra colección y se mueve el alias (pestaña Reindexado blue-green).</p>`)}
+        ${panel('El alias: el nombre que usa la aplicación', `<div class="table-wrap"><table class="t"><thead><tr><th>Alias</th><th>Apunta a la colección</th></tr></thead><tbody><tr><td class="mono">docs</td><td class="mono">${esc(ix.name)}</td></tr></tbody></table></div><p class="panel-note">La aplicación siempre busca en <code>docs</code>. La ${rich('[[coleccion|colección]]')} real se llama <code>${esc(ix.name)}</code>. Para cambiar de versión se crea otra colección y se mueve el alias; lo practicas en el camino avanzado.</p>`)}
         ${panel('Qdrant · configuración de la colección', `<pre class="code">${esc(JSON.stringify(collection, null, 2))}</pre><p class="panel-note">BM25 no es un índice aparte: es el vector sparse <code>bm25</code> de cada punto, y Qdrant mantiene las estadísticas de IDF de la colección. Memoria de este índice de juguete: ${ix.points.length} × ${ix.dims} dims × 4 B = <b>${bytes(ix.points.length * ix.dims * 4)}</b> en vectores. Calcula uno real en Dimensionamiento.</p>`)}
       </div></div>` +
-      `<div class="grid-2">${panel('Qdrant · puntos', `<div class="table-wrap"><table class="t"><thead><tr><th>ID</th><th>Doc</th><th>Pág.</th><th>Chunk</th><th>Vector denso</th><th>Términos sparse</th></tr></thead><tbody>${rows}</tbody></table></div>`, `${ix.points.length} puntos`)}
-      ${panel('Punto seleccionado', p ? `<pre class="code">${esc(pointJson)}</pre>` : '<p class="muted">Selecciona un punto.</p>')}</div>`;
+      `<div class="grid-2">${panel('Base de vectores (Qdrant): un punto por fragmento', `<div class="table-wrap"><table class="t"><thead><tr><th>ID</th><th>Doc</th><th>Pág.</th><th>Chunk</th><th>Vector denso</th><th>Términos sparse</th></tr></thead><tbody>${rows}</tbody></table></div>`, `${ix.points.length} puntos`)}
+      ${panel('Punto seleccionado', p ? `<pre class="code">${esc(pointJson)}</pre>` : '<p class="muted">Selecciona un punto.</p>')}</div>` +
+      quiz('index');
   };
 
   // ---------------------------------------------------------------- consulta
-  function queryStrip() {
-    const t = S.trace;
-    const status = t.generation.blocked.length ? '<span class="pill warn">⚠ fragmento en cuarentena</span>' : '';
-    const verdict = t.verification.noAnswer ? '<span class="pill neutral">sin respuesta</span>' : (t.verification.ok ? '<span class="pill good">✓ citas válidas</span>' : '<span class="pill bad">✗ citas por revisar</span>');
-    return `<div class="qstrip"><span class="label">Pregunta en curso · modo ${esc(modeName(S.opts.mode))}${S.opts.useRerank ? ' + rerank' : ''}</span><q>${esc(S.query)}</q><span class="ans">${esc(t.generation.answer.slice(0, 180))}${t.generation.answer.length > 180 ? '…' : ''} ${verdict} ${status}</span></div>`;
+  const MODE_LABEL = { hybrid: 'Híbrida', dense: 'Solo significado', bm25: 'Solo palabras' };
+  function answerHtml(t) {
+    const g = t.generation;
+    return g.parts.length
+      ? g.parts.map(p => `${esc(p.text)} <span class="cite ${p.cite > t.final.length ? 'bad' : ''}">${p.cite}</span>.`).join(' ')
+      : esc(g.answer);
   }
-  const modeName = m => ({ hybrid: 'híbrido', dense: 'solo densa', bm25: 'solo BM25' }[m]);
+  function verdictPill(t) {
+    if (t.verification.noAnswer) return '<span class="pill neutral">responde "no lo sé"</span>';
+    return t.verification.ok ? '<span class="pill good">✓ citas válidas</span>' : '<span class="pill bad">✗ citas por revisar</span>';
+  }
+  // barra de la consulta: pregunta, modo y rerank disponibles en cada paso, sin regresar
+  function searchBar() {
+    const t = S.trace;
+    const quarantine = t.generation.blocked.length ? '<span class="pill warn">⚠ fragmento en cuarentena</span>' : '';
+    return `<div class="qstrip sbar">
+      <div class="sbar-top"><span class="label">Tu pregunta</span><button class="btn small on-dark" data-action="open-q">Cambiar pregunta</button></div>
+      <q>${esc(S.query)}</q>
+      <div class="sbar-ctrl">
+        <div class="seg on-dark" role="group" aria-label="Modo de búsqueda">${['hybrid', 'dense', 'bm25'].map(m => `<button data-action="mode" data-mode="${m}" aria-pressed="${S.opts.mode === m}">${MODE_LABEL[m]}</button>`).join('')}</div>
+        <label class="check on-dark"><input type="checkbox" data-action="toggle-rerank" ${S.opts.useRerank ? 'checked' : ''}> Filtro fino (rerank)</label>
+      </div>
+      <span class="ans">${esc(t.generation.answer.slice(0, 160))}${t.generation.answer.length > 160 ? '…' : ''} ${verdictPill(t)} ${quarantine}</span>
+    </div>`;
+  }
+  // misma pregunta y ajustes con los tres modos de búsqueda, lado a lado
+  function compareModes(title) {
+    const cards = ['hybrid', 'dense', 'bm25'].map(m => {
+      const t = E.runQuery(S.index, S.query, Object.assign({}, S.opts, { mode: m, hallucinate: false }));
+      const top = (t.final.length ? t.final : []).map(r => `<li>${esc(r.point.payload.title)} <span class="tag">pág. ${r.point.payload.page}</span></li>`).join('');
+      const cur = m === S.opts.mode;
+      return `<article class="cmp ${cur ? 'cur' : ''}">
+        <header><b>${MODE_LABEL[m]}</b>${cur ? '<span class="pill neutral">modo actual</span>' : `<button class="btn small" data-action="mode" data-mode="${m}">Usar este modo</button>`}</header>
+        <span class="label">Llegan al modelo</span>${top ? `<ol>${top}</ol>` : '<p class="muted">Ningún fragmento</p>'}
+        <span class="label">Respuesta</span><p>${esc(t.generation.answer.slice(0, 170))}${t.generation.answer.length > 170 ? '…' : ''}</p>${verdictPill(t)}
+      </article>`;
+    }).join('');
+    return panel(title, `<p class="panel-note">Misma pregunta y mismos ajustes; solo cambia cómo se busca.</p><div class="cmp-grid">${cards}</div>`);
+  }
+  // comprobación de fase: opciones, respuesta explicada y puntaje guardado en el dispositivo
+  function quiz(set) {
+    const qs = L.QUIZZES[set];
+    const done = qs.filter(q => S.quiz[q.id] != null);
+    const ok = done.filter(q => S.quiz[q.id] === q.answer).length;
+    const items = qs.map(q => {
+      const a = S.quiz[q.id];
+      const opts = q.options.map((o, i) => {
+        const cls = a == null ? '' : (i === q.answer ? 'right' : (i === a ? 'wrong' : ''));
+        return `<button class="qopt ${cls}" data-action="quiz" data-q="${q.id}" data-i="${i}" ${a != null ? 'disabled' : ''}>${esc(o)}</button>`;
+      }).join('');
+      const why = a != null ? `<p class="qwhy ${a === q.answer ? 'good' : 'bad'}"><b>${a === q.answer ? 'Correcto.' : 'No exactamente.'}</b> ${esc(q.why)}</p>` : '';
+      return `<div class="qitem"><p class="qq">${esc(q.q)}</p><div class="qopts">${opts}</div>${why}</div>`;
+    }).join('');
+    const foot = `<div class="qfoot"><span>${ok} de ${qs.length} correctas</span>${done.length ? `<button class="btn small" data-action="quiz-reset" data-set="${set}">Intentar de nuevo</button>` : ''}</div>`;
+    return `<section class="panel quiz"><h3><span>Comprueba lo que aprendiste</span><span class="muted num panel-aside">${done.length}/${qs.length}</span></h3>${items}${foot}</section>`;
+  }
+
+  R.problem = () => {
+    const sample = C.SAMPLE_QUERIES.find(x => x.q === S.query);
+    const noRag = L.NO_RAG[sample ? sample.id : 'otra'];
+    const t = S.trace;
+    const sources = t.final.map((r, i) => `<li><span class="cite">${i + 1}</span> ${esc(r.point.payload.title)} · pág. ${r.point.payload.page}</li>`).join('');
+    return `<div class="chips" role="group" aria-label="Pregunta de ejemplo">${C.SAMPLE_QUERIES.map(x => `<button class="chip" data-action="sample" data-id="${x.id}" aria-pressed="${x.q === S.query}">${esc(x.label)}<small>${esc(x.q)}</small></button>`).join('')}</div>
+      <div class="vs">
+        <section class="panel vs-card bad"><h3>Sin RAG</h3><p class="panel-note">El modelo responde solo con lo que aprendió en su entrenamiento.</p><p class="answer">${esc(noRag)}</p><span class="pill bad">✗ sin fuente: no se puede comprobar</span></section>
+        <section class="panel vs-card good"><h3>Con RAG</h3><p class="panel-note">Primero busca en los documentos y responde solo con lo que encontró.</p><p class="answer">${answerHtml(t)}</p>${sources ? `<ul class="src">${sources}</ul>` : ''}${verdictPill(t)}</section>
+      </div>
+      <div class="callout info"><span>Los siguientes pasos explican cómo se construye la respuesta de la derecha: primero se preparan los documentos (fase 1) y después se responde la pregunta (fase 2).</span></div>`;
+  };
+
+  R.summary = () => {
+    const t = S.trace, o = S.opts;
+    const docs = list => list.slice(0, 3).map(r => `${r.point.payload.title} (pág. ${r.point.payload.page})`).join(' · ') || 'nada';
+    const cs = topConcepts(t.qvec).slice(0, 3).map(c => c.name).join(', ');
+    const steps = [
+      ['question', 'Palabras clave', t.queryTerms.join(', ') || 'ninguna'],
+      ['qembed', 'Tema detectado', cs || 'ninguno reconocido'],
+      ['dense', 'Búsqueda por significado', o.mode === 'bm25' ? 'no se ejecutó en este modo' : docs(t.dense)],
+      ['bm25', 'Búsqueda por palabras', o.mode === 'dense' ? 'no se ejecutó en este modo' : docs(t.bm25)],
+      ['rrf', 'Una sola lista', docs(t.fused)],
+      ['rerank', 'Filtro fino', o.useRerank ? `${t.final.length} de ${t.reranked.length} superaron el umbral (${o.threshold})` : `desactivado: pasan los primeros ${o.topK}`],
+      ['generate', 'Respuesta', t.generation.answer.slice(0, 160) + (t.generation.blocked.length ? ' (un fragmento quedó en cuarentena)' : '')],
+      ['verify', 'Citas', t.verification.noAnswer ? 'sin afirmaciones que comprobar' : (t.verification.ok ? 'todas válidas' : 'hay citas inválidas')],
+    ];
+    const tl = `<ol class="timeline">${steps.map(([id, label, text]) => `<li><button class="tl-item" data-stage="${id}"><span class="tl-n">${stageIdx(id) + 1}</span><span class="tl-body"><b>${label}</b><span>${esc(text)}</span></span></button></li>`).join('')}</ol>`;
+    return panel(`Así viajó «${esc(S.query)}»`, tl + '<p class="panel-note">Toca cualquier paso para verlo en detalle.</p>') +
+      compareModes('Así habría respondido cada modo') +
+      quiz('query') +
+      panel('¿Qué sigue?', `<div class="next">
+        <a class="btn" href="#advanced">Camino avanzado: operar en producción →</a>
+        <a class="btn" href="#glossary">Repasar el glosario</a>
+        <a class="btn ghost" href="#docs">Leer la guía técnica</a></div>`);
+  };
+
+  const modeName = m => MODE_LABEL[m].toLowerCase();
 
   R.question = () => {
     const raw = E.rawTokens(S.query);
@@ -417,10 +653,6 @@
       <span class="label">Ejemplos</span>
       <div class="chips">${C.SAMPLE_QUERIES.map(s => `<button class="chip" data-action="sample" data-id="${s.id}" aria-pressed="${s.q === S.query}">${esc(s.label)}<small>${esc(s.q)}</small></button>`).join('')}</div>
       ${sample ? `<div class="callout info"><b>Qué observar</b><span>${esc(sample.hint)}</span></div>` : ''}`) +
-      panel('Estrategia de búsqueda', `<div class="controls">
-        <div class="field"><span class="label">Modo</span><div class="seg" role="group" aria-label="Modo de búsqueda">${['hybrid', 'dense', 'bm25'].map(m => `<button data-action="mode" data-mode="${m}" aria-pressed="${S.opts.mode === m}">${modeName(m)}</button>`).join('')}</div></div>
-        <label class="check"><input type="checkbox" data-action="toggle-rerank" ${S.opts.useRerank ? 'checked' : ''}> Reranking</label>
-      </div><p class="panel-note">Compara los modos con las preguntas de ejemplo: la respuesta final cambia según qué fragmentos llegan al LLM.</p>`) +
       panel('Normalización', `<div class="arrow-row">
         <span class="label">1 · Tokens (minúsculas, sin acentos)</span><div class="tokens">${raw.map(t => `<span class="tok ${E.terms(t).length ? '' : 'stop'}">${esc(t)}</span>`).join('')}</div>
         <span class="label">2 · Términos sin palabras vacías y con stemming</span><div class="tokens">${S.trace.queryTerms.map(t => `<span class="tok stem">${esc(t)}</span>`).join('') || '<span class="muted">Ningún término útil</span>'}</div>
@@ -434,23 +666,23 @@
     return `<div class="grid-2">
       ${panel('Vector de la pregunta', `${vecStrip(t.qvec, t.model)}<div class="vec-axis"><span>conceptos</span><span>hash</span></div>
         <span class="label">Conceptos activados</span><div class="concepts">${cs.map(c => `<span class="pill dense">${esc(c.name)} ${fx(c.v, 2)}</span>`).join('') || '<span class="muted">Ninguno</span>'}</div>
-        ${unknown.length ? `<div class="callout warn"><b>Términos sin concepto</b><span>${unknown.map(u => `<code>${esc(u)}</code>`).join(' ')} solo caen en dimensiones hash. La búsqueda densa casi no los distingue; BM25 sí los encuentra si aparecen tal cual.</span></div>` : ''}`)}
+        ${unknown.length ? `<div class="callout warn"><b>Palabras que el modelo no entiende</b><span>${unknown.map(u => `<code>${esc(u)}</code>`).join(' ')} no tienen significado para el modelo y casi no mueven el vector. La búsqueda por significado no las distingue; BM25 sí las encuentra si aparecen tal cual.</span></div>` : ''}`)}
       ${panel('La pregunta en el mapa', `${scatter({ query: t.qvec, highlight: new Set(t.dense.slice(0, 3).map(r => r.point.id)) })}<p class="panel-note">El rombo es la pregunta, proyectada en el mismo plano que los fragmentos. Los puntos resaltados son los 3 más cercanos por coseno (en el espacio completo, no en esta proyección 2D).</p>`)}
     </div>`;
   };
 
   R.dense = () => {
     const t = S.trace;
-    const off = S.opts.mode === 'bm25' ? '<div class="callout warn">El modo actual es "solo BM25": la búsqueda densa no se ejecuta. Cámbialo en la etapa Pregunta.</div>' : '';
+    const off = S.opts.mode === 'bm25' ? '<div class="callout warn">El modo actual es "solo palabras": la búsqueda por significado no se ejecuta. Cambia el modo en la barra oscura de arriba.</div>' : '';
     const max = t.dense.length ? t.dense[0].score : 1;
-    return off + qdrantHint() + panel('Candidatos', slider('cand', 'Límite de cada prefetch (N)', 3, 15, 1, S.opts.candidates)) +
+    return off + qdrantHint() + panel('Límite de cada búsqueda', slider('cand', 'Candidatos por búsqueda (N)', 3, 15, 1, S.opts.candidates)) +
       `<div class="grid-2">${panel('Resultados por similitud coseno', `<div class="results">${t.dense.map(r => resRow(r, { label: 'cos ' + fx(r.score), bar: Math.max(0, r.score) / (max || 1), cls: 'd' })).join('') || '<p class="muted">Sin resultados.</p>'}</div>`, `top ${t.dense.length}`)}
       ${panel('Vecinos en el mapa', scatter({ query: t.qvec, highlight: new Set(t.dense.slice(0, 5).map(r => r.point.id)) }) + '<p class="panel-note">Líneas: los 5 vecinos más cercanos de la pregunta.</p>')}</div>`;
   };
 
   R.bm25 = () => {
     const t = S.trace;
-    const off = S.opts.mode === 'dense' ? '<div class="callout warn">El modo actual es "solo densa": BM25 no se ejecuta. Cámbialo en la etapa Pregunta.</div>' : '';
+    const off = S.opts.mode === 'dense' ? '<div class="callout warn">El modo actual es "solo significado": BM25 no se ejecuta. Cambia el modo en la barra oscura de arriba.</div>' : '';
     const uniq = [...new Set(t.queryTerms)];
     const idfRows = uniq.map(term => {
       const df = S.index.bm25.df.get(term) || 0;
@@ -490,7 +722,8 @@
     return panel('La llamada a Qdrant', qdrantCall()) +
       panel('Constante k', `${slider('rrfk', 'k de RRF', 1, 100, 1, k)}<p class="panel-note">Con k bajo, el primer lugar de cada lista pesa mucho más que el resto. Con k alto, aparecer en ambas listas importa más que la posición exacta.${example ? ` Primer lugar: <code>${esc(example)}</code>.` : ''} El control es para experimentar: en producción la constante la aplica Qdrant.</p>`) +
       panel('Lista fusionada', `<div class="legend"><span><i style="background:var(--dense)"></i>aporte de la búsqueda densa</span><span><i style="background:var(--sparse)"></i>aporte de BM25</span></div>
-        <div class="table-wrap"><table class="t"><thead><tr><th>#</th><th>Fragmento</th><th>Pos. densa</th><th>Aporte</th><th>Pos. BM25</th><th>Aporte</th><th>RRF</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`, `${t.fused.length} candidatos`);
+        <div class="table-wrap"><table class="t"><thead><tr><th>#</th><th>Fragmento</th><th>Pos. significado</th><th>Aporte</th><th>Pos. BM25</th><th>Aporte</th><th>Total</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`, `${t.fused.length} candidatos`) +
+      compareModes('Comparar los tres modos');
   };
 
   R.rerank = () => {
@@ -525,16 +758,14 @@
   R.generate = () => {
     const t = S.trace, g = t.generation;
     const blocked = g.blocked.map(b => `<div class="callout warn"><b>⚠ Fragmento [${b.n}] en cuarentena · ${esc(b.source)}</b><span>Contiene una instrucción dirigida al modelo: «${esc(b.text)}». Se excluye del contexto útil y no se obedece.</span></div>`).join('');
-    const answer = g.parts.length
-      ? g.parts.map(p => `${esc(p.text)} <span class="cite ${p.cite > t.final.length ? 'bad' : ''}">${p.cite}</span>.`).join(' ')
-      : esc(g.answer);
+    const answer = answerHtml(t);
     const sources = t.final.map((r, i) => `<tr><td class="n">[${i + 1}]</td><td>${esc(r.point.payload.source)}</td><td class="n">${r.point.payload.page}</td><td class="n">${r.point.payload.chunk_index}</td></tr>`).join('');
     return panel('Simulación', `<label class="check"><input type="checkbox" data-action="toggle-halluc" ${S.opts.hallucinate ? 'checked' : ''}> Simular una alucinación (el LLM agrega una afirmación con una cita que no existe)</label>`) +
       blocked +
       `<div class="grid-2">
       ${panel('Respuesta', `<p class="answer">${answer}</p>${sources ? `<div class="table-wrap"><table class="t"><thead><tr><th>Cita</th><th>Fuente</th><th>Pág.</th><th>Chunk</th></tr></thead><tbody>${sources}</tbody></table></div>` : ''}`)}
       ${panel('Prompt enviado al LLM', `<span class="label">System</span><pre class="code wrap">${esc(E.SYSTEM_PROMPT)}</pre><span class="label">User</span><pre class="code wrap">${esc(g.prompt)}</pre>`)}
-      </div>`;
+      </div>` + compareModes('Comparar los tres modos');
   };
 
   R.verify = () => {
@@ -551,32 +782,46 @@
 
   function renderStage() {
     const st = STAGES[stageIdx(S.stage)];
-    const phaseStages = STAGES.filter(s => s.phase === st.phase);
-    const k = phaseStages.indexOf(st) + 1;
     const i = stageIdx(st.id);
     const prev = STAGES[i - 1], next = STAGES[i + 1];
+    const real = [];
     let body;
+    RCTX = real;
     try { body = R[st.id](); } catch (err) { body = `<div class="callout bad"><b>No se pudo calcular esta etapa</b><span>${esc(err.message)}</span></div>`; }
-    const prodList = `<ul>${st.prod.map(p => `<li>${esc(p)}</li>`).join('')}</ul><button class="btn small" data-doc-ref="${esc(st.ref)}">Leer en la guía: ${esc(st.ref)}</button>`;
-    const prod = isMobile()
-      ? `<details class="prod-note" data-fold="prod"${foldOpen('prod', false)}><summary><h3>En producción</h3></summary>${prodList}</details>`
-      : `<aside class="prod-note"><h3>En producción</h3>${prodList}</aside>`;
+    RCTX = null;
+    const ch = CHALLENGES[st.id];
+    const withBar = st.phase === 'query' || st.phase === 'close';
+    const tryLayer = ch ? `<section class="layer layer-try"><span class="layer-tag">Experimenta</span>
+        <p>${rich(ch.task)}</p>
+        ${ch.action ? `<button class="btn primary small" data-action="challenge">${esc(ch.action.label)}</button>` : ''}
+        <details class="expect" data-fold="exp-${st.id}"${foldOpen('exp-' + st.id, false)}><summary>Qué deberías ver</summary><p>${rich(ch.expect)}</p></details>
+      </section>` : '';
     $('#stage').innerHTML = `
       <div class="stage-top">
         <button class="steps-btn" data-action="open-steps" aria-haspopup="dialog">Paso ${i + 1} de ${STAGES.length} <span aria-hidden="true">▾</span></button>
         <div class="progress" role="progressbar" aria-label="Avance del recorrido" aria-valuemin="1" aria-valuemax="${STAGES.length}" aria-valuenow="${i + 1}"><i style="width:${(i + 1) / STAGES.length * 100}%"></i></div>
-        <span class="swipe-hint">Desliza ← → para cambiar de paso</span>
+        <span class="swipe-hint">Desliza ← → · toca lo subrayado</span>
       </div>
       <header class="stage-head">
-        <p class="eyebrow">${st.phase === 'index' ? 'Fase 1 · Indexación' : 'Fase 2 · Consulta'} · etapa ${k} de ${phaseStages.length}</p>
+        <p class="eyebrow">Paso ${i + 1} · ${PHASE_LABEL[st.phase]}</p>
         <h2>${esc(st.title)}</h2>
-        <p class="lede">${esc(st.lede)}</p>
-        <div class="io-row"><span><b>Entra</b>${esc(st.io[0])}</span><span><b>Sale</b>${esc(st.io[1])}</span></div>
       </header>
-      ${st.phase === 'query' ? queryStrip() : ''}
-      ${body}
-      ${prod}
-      <nav class="stepper" aria-label="Navegación entre etapas">
+      <section class="layer layer-idea"><span class="layer-tag">La idea</span>
+        <p class="lede">${rich(st.idea)}</p>
+        ${st.analogy ? `<p class="analogy"><b>Piénsalo así:</b> ${esc(st.analogy)}</p>` : ''}
+        <div class="io-row"><span><b>Entra</b>${esc(st.io[0])}</span><span><b>Sale</b>${esc(st.io[1])}</span></div>
+      </section>
+      ${withBar ? searchBar() : ''}
+      <section class="layer layer-see"><span class="layer-tag">Míralo</span>${body}</section>
+      ${tryLayer}
+      <details class="layer layer-real" data-fold="real"${foldOpen('real', false)}>
+        <summary><span class="layer-tag">En la vida real</span><span class="muted">herramientas, código y producción</span></summary>
+        <p>${rich(st.tools)}</p>
+        ${real.join('')}
+        <h3>En producción</h3><ul>${st.prod.map(x => `<li>${rich(x)}</li>`).join('')}</ul>
+        <button class="btn small" data-doc-ref="${esc(st.ref)}">Leer en la guía técnica: ${esc(st.ref)}</button>
+      </details>
+      <nav class="stepper" aria-label="Navegación entre pasos">
         <button class="btn" data-stage="${prev ? prev.id : ''}" ${prev ? '' : 'disabled'} aria-label="Paso anterior${prev ? ': ' + esc(prev.title) : ''}"><span class="ellip">← ${prev ? esc(prev.title) : 'Inicio'}</span></button>
         <button class="btn primary" data-stage="${next ? next.id : ''}" ${next ? '' : 'disabled'} aria-label="Paso siguiente${next ? ': ' + esc(next.title) : ''}"><span class="ellip">${next ? esc(next.title) : 'Fin del recorrido'}</span> →</button>
       </nav>`;
@@ -673,9 +918,10 @@
     const f = e.target.closest('[data-form="ask"]');
     if (!f) return;
     e.preventDefault();
-    const q = $('#q-input').value.trim();
+    const q = f.querySelector('input').value.trim();
     if (!q) { toast('Escribe una pregunta'); return; }
     S.query = q;
+    const qs = $('#q-sheet'); if (qs.open) qs.close();
     rerun();
     renderLab();
     toast('Pregunta recalculada en todas las etapas');
@@ -684,6 +930,18 @@
   function labAction(a, el) {
     switch (a) {
       case 'play': togglePlay(); return;
+      case 'open-q': openQSheet(); return;
+      case 'close-q': $('#q-sheet').close(); return;
+      case 'challenge': {
+        const ch = CHALLENGES[S.stage];
+        if (!ch || !ch.action) return;
+        if (ch.action.run() === 'open-q') { openQSheet(); return; }
+        FOLDS['exp-' + S.stage] = true;   // muestra "Qué deberías ver" después de aplicar el reto
+        rebuild(); renderLab(); toast('Listo: observa el resultado');
+        return;
+      }
+      case 'quiz': S.quiz[el.dataset.q] = +el.dataset.i; renderLab(); return;
+      case 'quiz-reset': L.QUIZZES[el.dataset.set].forEach(q => { delete S.quiz[q.id]; }); renderLab(); return;
       case 'open-steps': { const d = $('#step-sheet'); if (!d.open) d.showModal(); const cur = $('#map-sheet [aria-current="step"]'); if (cur) cur.scrollIntoView({ block: 'center' }); return; }
       case 'close-steps': $('#step-sheet').close(); return;
       case 'reset-lab': stopPlay(); initLab(true); renderLab(); toast('Laboratorio restablecido'); return;
@@ -724,7 +982,11 @@
       }
       case 'pick-s3': S.s3Key = el.dataset.key; renderLab(); return;
       case 'set-model': S.cfg.model = el.dataset.model; rebuild(); renderLab(); toast('Índice reconstruido con ' + S.cfg.model); return;
-      case 'sample': S.query = C.SAMPLE_QUERIES.find(s => s.id === el.dataset.id).q; rerun(); renderLab(); return;
+      case 'sample': {
+        S.query = C.SAMPLE_QUERIES.find(s => s.id === el.dataset.id).q;
+        const qs = $('#q-sheet'); if (qs.open) qs.close();
+        rerun(); renderLab(); return;
+      }
       case 'mode': S.opts.mode = el.dataset.mode; rerun(); renderLab(); return;
       case 'toggle-rerank': S.opts.useRerank = el.checked; rerun(); renderLab(); return;
       case 'toggle-halluc': S.opts.hallucinate = el.checked; rerun(); renderLab(); return;
@@ -732,12 +994,55 @@
     }
   }
 
+  // ================================================================ hojas: pregunta y término
+  function openQSheet() {
+    $('#q-sheet-body').innerHTML = `<form class="field" data-form="ask"><label for="q-sheet-input">Escribe tu pregunta</label>
+        <div class="row"><input type="text" id="q-sheet-input" value="${esc(S.query)}" autocomplete="off"><button class="btn primary" type="submit">Preguntar</button></div></form>
+      <span class="label">O elige un ejemplo</span>
+      <div class="qs-list">${C.SAMPLE_QUERIES.map(x => `<button class="qs-item" data-action="sample" data-id="${x.id}" aria-pressed="${x.q === S.query}"><b>${esc(x.q)}</b><small>${esc(x.label)} · ${esc(x.hint)}</small></button>`).join('')}</div>`;
+    const d = $('#q-sheet');
+    if (!d.open) d.showModal();
+  }
+  const labTargetLabel = target => target.startsWith('#')
+    ? ({ '#bluegreen': 'Reindexado blue-green', '#sizing': 'Memoria del índice' }[target] || 'Ver')
+    : `Paso ${stageIdx(target) + 1}: ${STAGES[stageIdx(target)].title}`;
+  function termHtml(key, withTitle) {
+    const g = L.GLOSSARY[key];
+    return `${withTitle ? `<h3>${esc(g.term)}</h3>` : ''}<p class="t-def">${esc(g.def)}</p>
+      ${g.analogy ? `<p class="analogy"><b>Piénsalo así:</b> ${esc(g.analogy)}</p>` : ''}
+      ${g.real ? `<p class="t-real"><b>En la vida real:</b> ${esc(g.real)}</p>` : ''}
+      <div class="t-actions"><button class="btn small primary" data-term-go="${g.lab}">Verlo en el lab: ${esc(labTargetLabel(g.lab))}</button></div>
+      ${g.rel && g.rel.length ? `<div class="t-rel"><span class="label">Relacionado</span><div class="sys-tags">${g.rel.map(r => `<button class="tag-btn" data-term="${r}">${esc(L.GLOSSARY[r].term)}</button>`).join('')}</div></div>` : ''}`;
+  }
+  function openTerm(key) {
+    if (!L.GLOSSARY[key]) return;
+    $('#term-title').textContent = L.GLOSSARY[key].term;
+    $('#term-body').innerHTML = termHtml(key, false);
+    const d = $('#term-sheet');
+    if (!d.open) d.showModal();
+  }
+  function goTarget(target) {
+    [$('#term-sheet'), $('#q-sheet'), $('#step-sheet')].forEach(d => { if (d.open) d.close(); });
+    if (target.startsWith('#')) { location.hash = target.slice(1); return; }
+    if (location.hash === '#lab') goStage(target);
+    else { S.stage = target; S.visited.add(target); location.hash = 'lab'; }
+  }
+  function renderGlossary() {
+    const q = E.normalize(($('#g-search') || { value: '' }).value.trim());
+    const keys = Object.keys(L.GLOSSARY).sort((a, b) => L.GLOSSARY[a].term.localeCompare(L.GLOSSARY[b].term, 'es'));
+    const hits = keys.filter(k => !q || E.normalize(L.GLOSSARY[k].term + ' ' + L.GLOSSARY[k].def).includes(q));
+    $('#glossary-list').innerHTML = hits.length
+      ? hits.map(k => `<article class="gcard" id="g-${k}">${termHtml(k, true)}</article>`).join('')
+      : '<p class="muted">Ningún término coincide con la búsqueda.</p>';
+    $('#g-count').textContent = `${hits.length} de ${keys.length} términos`;
+  }
+
   // ================================================================ portada
   function renderHome() {
     $('#journey').innerHTML = STAGES.map((st, i) => `<li><a class="jstep ${S.visited.has(st.id) && i > 0 ? 'seen' : ''}" href="#lab" data-start="${st.id}">
       <span class="jn">${i + 1}</span>
       <span class="jt"><b>${esc(st.title)}</b><small>${esc(st.learn)}</small></span>
-      <span class="pill ${st.phase === 'index' ? 'dense' : 'sparse'}">${st.phase === 'index' ? 'Indexación' : 'Consulta'}</span></a></li>`).join('');
+      <span class="pill ${{ index: 'dense', query: 'sparse' }[st.phase] || 'neutral'}">${{ intro: 'Introducción', index: 'Indexación', query: 'Consulta', close: 'Cierre' }[st.phase]}</span></a></li>`).join('');
     const cont = $('#continue-btn');
     const i = stageIdx(S.stage);
     cont.hidden = !(S.visited.size > 1 && i > 0);
@@ -1056,6 +1361,7 @@
       if (out) out.textContent = el.dataset.sz === 'chunks' ? CHUNK_STEPS[+el.value].toLocaleString('es-MX') : el.value + (el.dataset.sz === 'payloadBytes' ? ' B' : '');
       return;
     }
+    if (el.id === 'g-search') { renderGlossary(); return; }
     if (el.tagName !== 'SELECT') dispatchInput(el);
   });
   document.addEventListener('change', e => {
@@ -1107,14 +1413,16 @@
   }
 
   // ================================================================ router y clics globales
-  const VIEWS = ['home', 'lab', 'bluegreen', 'sizing', 'docs'];
+  const VIEWS = ['home', 'lab', 'glossary', 'advanced', 'bluegreen', 'sizing', 'docs'];
+  const TAB_OF = { bluegreen: 'advanced', sizing: 'advanced' };
   function route() {
     const v = VIEWS.includes(location.hash.slice(1)) ? location.hash.slice(1) : 'home';
     VIEWS.forEach(x => { $('#view-' + x).hidden = x !== v; });
     document.body.classList.toggle('lab-active', v === 'lab');
-    $$('.tabs a').forEach(a => { if (a.dataset.view === v) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); });
+    $$('.tabs a').forEach(a => { if (a.dataset.view === (TAB_OF[v] || v)) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); });
     if (v !== 'lab') stopPlay();
     if (v === 'home') renderHome();
+    if (v === 'glossary') renderGlossary();
     if (v === 'lab') renderLab();
     if (v === 'bluegreen') renderBG();
     if (v === 'sizing') renderSizing();
@@ -1127,6 +1435,14 @@
   window.addEventListener('hashchange', () => { window.scrollTo(0, 0); route(); });
 
   document.addEventListener('click', e => {
+    const closer = e.target.closest('[data-close]');
+    if (closer) { closer.closest('dialog').close(); return; }
+    const term = e.target.closest('[data-term]');
+    if (term) { e.preventDefault(); openTerm(term.dataset.term); return; }
+    const go = e.target.closest('[data-term-go]');
+    if (go) { goTarget(go.dataset.termGo); return; }
+    const dlg = e.target.closest('dialog.sheet');
+    if (dlg && e.target === dlg) { dlg.close(); return; }   // clic en el fondo de una hoja
     const start = e.target.closest('[data-start]');
     if (start) {   // enlaces de la portada a una etapa concreta (el href #lab cambia la vista)
       S.stage = start.dataset.start;
@@ -1162,8 +1478,7 @@
       if (['rag-hibrido-guia.md', 'REVISION.md'].includes(file)) { loadDoc(file); window.scrollTo(0, 0); }
       return;
     }
-    const sheet = e.target.closest('#step-sheet');
-    if (sheet && e.target === sheet) { sheet.close(); return; }   // clic en el fondo de la hoja
+
     const bg = e.target.closest('[data-bg]');
     if (bg) { bgAction(bg.dataset.bg, bg); return; }
     const q = e.target.closest('[data-sz-q]');

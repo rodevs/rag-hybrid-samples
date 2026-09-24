@@ -33,9 +33,9 @@
   <nav class="tabs" aria-label="Secciones">
     <a href="#home" data-view="home"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 11l8-7 8 7v9h-5v-6H9v6H4z"/></svg><span class="tab-long">Inicio</span><span class="tab-short">Inicio</span></a>
     <a href="#lab" data-view="lab"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h10M4 12h16M4 18h7"/><circle cx="18" cy="6" r="2"/><circle cx="15" cy="18" r="2"/></svg><span class="tab-long">Recorrido</span><span class="tab-short">Pasos</span></a>
-    <a href="#bluegreen" data-view="bluegreen"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h11l-3-3M20 17H9l3 3"/></svg><span class="tab-long">Reindexado blue-green</span><span class="tab-short">Reindexar</span></a>
-    <a href="#sizing" data-view="sizing"><svg viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="6" rx="7" ry="3"/><path d="M5 6v6c0 1.7 3.1 3 7 3s7-1.3 7-3V6M5 12v6c0 1.7 3.1 3 7 3s7-1.3 7-3v-6"/></svg><span class="tab-long">Dimensionamiento</span><span class="tab-short">Memoria</span></a>
-    <a href="#docs" data-view="docs"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h9l4 4v14H6zM14 3v5h5M9 13h7M9 17h5"/></svg><span class="tab-long">Documentación</span><span class="tab-short">Guía</span></a>
+    <a href="#glossary" data-view="glossary"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h11a3 3 0 0 1 3 3v13H8a3 3 0 0 1-3-3zM5 17a3 3 0 0 1 3-3h11M9 8h6"/></svg><span class="tab-long">Glosario</span><span class="tab-short">Glosario</span></a>
+    <a href="#advanced" data-view="advanced"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l9 5-9 5-9-5zM3 13l9 5 9-5"/></svg><span class="tab-long">Camino avanzado</span><span class="tab-short">Avanzado</span></a>
+    <a href="#docs" data-view="docs"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h9l4 4v14H6zM14 3v5h5M9 13h7M9 17h5"/></svg><span class="tab-long">Guía técnica</span><span class="tab-short">Guía</span></a>
   </nav>
 </header>
 
@@ -47,7 +47,7 @@
         <h1 id="home-title">Aprende cómo un RAG híbrido encuentra, ordena y cita la información</h1>
         <p class="hero-sub">Un sistema RAG responde preguntas usando tus documentos. Aquí lo desarmas pieza por pieza: cambias un parámetro y ves cómo cambia cada etapa, desde el PDF hasta la respuesta con citas.</p>
         <div class="hero-actions">
-          <a class="btn primary big" href="#lab" data-start="docs">Empezar el recorrido</a>
+          <a class="btn primary big" href="#lab" data-start="problem">Empezar el recorrido</a>
           <a class="btn big" href="#lab" id="continue-btn" hidden></a>
           <a class="btn big ghost" href="#docs">Leer la guía</a>
         </div>
@@ -65,9 +65,9 @@
     </header>
 
     <ul class="facts" aria-label="El laboratorio en números">
-      <li><b>13</b><span>etapas en 2 fases: indexación y consulta</span></li>
+      <li><b>15</b><span>pasos: del problema a tu resumen final</span></li>
       <li><b>8</b><span>documentos de ejemplo que puedes editar</span></li>
-      <li><b>5</b><span>preguntas que muestran aciertos y fallas típicas</span></li>
+      <li><b>37</b><span>términos explicados en lenguaje simple, a un toque</span></li>
       <li><b>0</b><span>cuentas o API keys: todo corre en tu navegador</span></li>
     </ul>
 
@@ -83,51 +83,53 @@
       <h2 id="learn-title">Lo que aprenderás</h2>
       <div class="modules">
         <article class="module">
-          <p class="eyebrow">Fase 1 · etapas 1 a 5</p>
-          <h3>Indexar documentos</h3>
+          <p class="eyebrow">Pasos 1 a 6</p>
+          <h3>El problema y los documentos</h3>
           <ul>
+            <li>Por qué un modelo de lenguaje inventa respuestas y cómo RAG lo evita.</li>
             <li>Cómo se parte un PDF en fragmentos y por qué importa el traslape.</li>
             <li>Qué es un embedding y por qué dos frases distintas pueden quedar cerca.</li>
             <li>Qué guarda la base vectorial (vector denso, vector sparse y metadata) y qué se guarda en S3.</li>
           </ul>
-          <a class="more-link" href="#lab" data-start="docs">Ir a la fase 1 →</a>
+          <a class="more-link" href="#lab" data-start="problem">Empezar aquí →</a>
         </article>
         <article class="module">
-          <p class="eyebrow">Fase 2 · etapas 6 a 10</p>
+          <p class="eyebrow">Pasos 7 a 11</p>
           <h3>Buscar de dos formas y fusionar</h3>
           <ul>
-            <li>Cuándo gana la búsqueda densa y cuándo gana BM25, con ejemplos que puedes probar.</li>
+            <li>Cuándo gana la búsqueda por significado y cuándo la búsqueda por palabras exactas (BM25).</li>
             <li>Cómo pesa BM25 los términos raros (IDF) y cómo RRF combina dos rankings por posición.</li>
-            <li>Cómo se ve la llamada real a Qdrant que hace todo esto en una sola petición.</li>
+            <li>Cómo comparar los tres modos de búsqueda sin regresar a ningún paso.</li>
           </ul>
-          <a class="more-link" href="#lab" data-start="question">Ir a la fase 2 →</a>
+          <a class="more-link" href="#lab" data-start="question">Ir al paso 7 →</a>
         </article>
         <article class="module">
-          <p class="eyebrow">Fase 2 · etapas 11 a 13</p>
+          <p class="eyebrow">Pasos 12 a 15</p>
           <h3>Responder con confianza</h3>
           <ul>
             <li>Cómo un reranker descarta candidatos y cuándo el sistema debe responder "no lo sé".</li>
             <li>Cómo se arma el prompt con citas y cómo se verifica que cada cita exista.</li>
             <li>Qué pasa cuando un documento trae instrucciones escondidas (prompt injection).</li>
+            <li>El recorrido completo de tu pregunta y una comprobación de lo aprendido.</li>
           </ul>
-          <a class="more-link" href="#lab" data-start="rerank">Ir al reranking →</a>
+          <a class="more-link" href="#lab" data-start="rerank">Ir al paso 12 →</a>
         </article>
         <article class="module">
-          <p class="eyebrow">Operación</p>
+          <p class="eyebrow">Camino avanzado</p>
           <h3>Mantenerlo en producción</h3>
           <ul>
             <li>Cómo reindexar todo sin downtime con colecciones versionadas y un alias.</li>
             <li>Cómo no perder documentos durante el reindexado y cómo evaluar antes de cambiar.</li>
             <li>Cuánta memoria necesita un índice con millones de fragmentos y qué ahorra la cuantización.</li>
           </ul>
-          <span class="more-links"><a class="more-link" href="#bluegreen">Reindexado blue-green →</a><a class="more-link" href="#sizing">Dimensionamiento →</a></span>
+          <a class="more-link" href="#advanced">Ver el camino avanzado →</a>
         </article>
       </div>
     </section>
 
     <section class="home-sec" aria-labelledby="journey-title">
-      <h2 id="journey-title">El recorrido, etapa por etapa</h2>
-      <p class="sec-intro">Cada etapa muestra qué entra, qué sale, qué se guarda y qué cambia en un sistema de producción. Puedes saltar a cualquiera.</p>
+      <h2 id="journey-title">El recorrido, paso a paso</h2>
+      <p class="sec-intro">Cada paso tiene cuatro capas: <b>la idea</b> en lenguaje simple, <b>míralo</b> con una visualización, <b>experimenta</b> con un reto guiado y, si quieres más, <b>en la vida real</b> con herramientas y código. Puedes saltar a cualquier paso.</p>
       <ol class="journey" id="journey"></ol>
     </section>
 
@@ -147,14 +149,18 @@
         </div>
         <div>
           <h3>Para quién es</h3>
-          <p>Para desarrolladores, equipos de datos y cualquier persona que quiera entender qué pasa dentro de un RAG. No necesitas instalar nada. Saber leer un poco de código ayuda en la guía, no en el lab.</p>
+          <p>Para cualquier persona que quiera entender qué pasa dentro de un RAG, desde cero. No necesitas saber programar ni instalar nada. El código y la infraestructura están en la capa "En la vida real" y en la guía técnica, para cuando quieras ir más a fondo.</p>
+        </div>
+        <div>
+          <h3>¿Una palabra no te suena?</h3>
+          <p>Todas las palabras técnicas aparecen subrayadas: tócalas y verás qué significan, una analogía y dónde verlas en el lab. También puedes consultar el <a href="#glossary">glosario completo</a>.</p>
         </div>
         <div>
           <h3>Llévalo en el teléfono</h3>
-          <p>En el teléfono verás una etapa a la vez y podrás deslizar entre ellas. Instálalo como app para usarlo sin conexión; tu avance se guarda en el dispositivo.</p>
+          <p>En el teléfono verás un paso a la vez y podrás deslizar entre ellos. Instálalo como app para usarlo sin conexión; tu avance se guarda en el dispositivo.</p>
         </div>
       </div>
-      <div class="hero-actions"><a class="btn primary big" href="#lab" data-start="docs">Empezar el recorrido</a></div>
+      <div class="hero-actions"><a class="btn primary big" href="#lab" data-start="problem">Empezar el recorrido</a></div>
     </section>
   </section>
 
@@ -162,7 +168,7 @@
     <div class="intro">
       <div>
         <h1 id="lab-title">Cómo un RAG híbrido indexa, busca y responde</h1>
-        <p>Recorre las 13 etapas con un corpus de 8 documentos ficticios. Cambia parámetros, escribe preguntas o agrega documentos: cada etapa se recalcula al momento. Los embeddings, el reranker y el LLM son simulados y deterministas.</p>
+        <p>15 pasos, del problema a tu resumen final. En cada paso: la idea en lenguaje simple, una visualización, un reto para experimentar y, si quieres, los detalles técnicos. Toca cualquier palabra subrayada para ver qué significa.</p>
       </div>
       <div class="intro-actions">
         <button class="btn primary" data-action="play" id="play-btn">Reproducir recorrido</button>
@@ -174,20 +180,70 @@
       <article class="stage" id="stage" aria-live="polite"></article>
     </div>
     <dialog class="sheet" id="step-sheet" aria-labelledby="sheet-title">
-      <div class="sheet-head"><h2 id="sheet-title">Todas las etapas</h2><button class="btn small" data-action="close-steps">Cerrar</button></div>
+      <div class="sheet-head"><h2 id="sheet-title">Todos los pasos</h2><button class="btn small" data-action="close-steps">Cerrar</button></div>
       <div class="sheet-body" id="map-sheet"></div>
     </dialog>
+    <dialog class="sheet" id="q-sheet" aria-labelledby="qs-title">
+      <div class="sheet-head"><h2 id="qs-title">Cambiar la pregunta</h2><button class="btn small" data-close>Cerrar</button></div>
+      <div class="sheet-body" id="q-sheet-body"></div>
+    </dialog>
+  </section>
+
+  <section id="view-glossary" class="view" hidden aria-labelledby="g-title">
+    <div class="intro">
+      <div>
+        <h1 id="g-title">Glosario</h1>
+        <p>Cada término explicado en lenguaje simple, con una analogía, cómo se llama en la vida real y un enlace al paso del lab donde lo ves funcionando.</p>
+      </div>
+    </div>
+    <div class="g-tools"><label class="sr-only" for="g-search">Buscar un término</label><input type="text" id="g-search" placeholder="Buscar: embedding, alias, S3…" autocomplete="off"><span class="muted num" id="g-count"></span></div>
+    <div class="g-list" id="glossary-list"></div>
+  </section>
+
+  <section id="view-advanced" class="view" hidden aria-labelledby="adv-title">
+    <div class="intro">
+      <div>
+        <p class="eyebrow">Después del recorrido básico</p>
+        <h1 id="adv-title">Camino avanzado: operar un RAG en producción</h1>
+        <p>Ya sabes cómo funciona un RAG. Aquí aprendes a mantenerlo vivo: cambiar la forma de indexar sin interrumpir a nadie y calcular cuánta memoria necesita. Te recomendamos terminar primero los 15 pasos del recorrido.</p>
+      </div>
+    </div>
+    <div class="adv">
+      <article class="adv-card">
+        <p class="eyebrow">Simulación interactiva</p>
+        <h2>Reindexar sin interrupciones (blue-green)</h2>
+        <p>Si cambias el tamaño de los fragmentos o el modelo de embeddings, hay que volver a procesar todos los documentos. Aprenderás a hacerlo en una colección nueva, al lado de la actual, y a cambiar el tráfico de golpe cuando esté lista.</p>
+        <span class="label">Antes de empezar, conviene conocer</span>
+        <div class="sys-tags"><button class="tag-btn" data-term="coleccion">Colección</button><button class="tag-btn" data-term="alias">Alias</button><button class="tag-btn" data-term="s3">S3</button><button class="tag-btn" data-term="embedding">Embedding</button><button class="tag-btn" data-term="golden">Golden set</button><button class="tag-btn" data-term="recall">Recall@k y MRR</button></div>
+        <a class="btn primary" href="#bluegreen">Abrir la simulación →</a>
+      </article>
+      <article class="adv-card">
+        <p class="eyebrow">Calculadora</p>
+        <h2>¿Cuánta memoria necesita el índice?</h2>
+        <p>Con miles de documentos todo cabe en una laptop; con millones, la memoria define el costo. Aprenderás de dónde sale ese número y cuánto ahorra guardar los vectores con menos precisión.</p>
+        <span class="label">Antes de empezar, conviene conocer</span>
+        <div class="sys-tags"><button class="tag-btn" data-term="vector">Vector</button><button class="tag-btn" data-term="dimension">Dimensión</button><button class="tag-btn" data-term="hnsw">HNSW</button><button class="tag-btn" data-term="cuantizacion">Cuantización</button></div>
+        <a class="btn primary" href="#sizing">Abrir la calculadora →</a>
+      </article>
+    </div>
   </section>
 
   <section id="view-bluegreen" class="view" hidden aria-labelledby="bg-title">
     <div class="intro">
       <div>
-        <h1 id="bg-title">Reindexado sin downtime con alias</h1>
-        <p>Construye <code>docs_v2</code> en paralelo, ingiere un documento mientras se reindexa, evalúa ambas colecciones y cambia el alias de forma atómica. Envía consultas en cualquier momento para ver qué colección responde.</p>
+        <p class="eyebrow"><a href="#advanced">← Camino avanzado</a></p>
+        <h1 id="bg-title">Reindexar sin interrupciones</h1>
+        <p>Construye <code>docs_v2</code> en paralelo, agrega un documento mientras se reindexa, evalúa ambas versiones y cambia el alias de golpe. Envía preguntas en cualquier momento para ver qué versión responde.</p>
       </div>
       <div class="intro-actions">
-        <button class="btn" data-action="bg-reset">Reiniciar simulación</button>
+        <button class="btn" data-bg="bg-reset">Reiniciar simulación</button>
       </div>
+    </div>
+    <div class="callout info whatis">
+      <b>Qué estás viendo</b>
+      <span><code>docs_v1</code> y <code>docs_v2</code> son dos <button type="button" class="term" data-term="coleccion">colecciones</button> dentro del mismo servidor de <button type="button" class="term" data-term="qdrant">Qdrant</button>: como dos tablas de una base de datos, una hecha con la estrategia vieja y otra con la nueva. No son carpetas ni campos.</span>
+      <span><code>docs</code> es un <button type="button" class="term" data-term="alias">alias</button>: un segundo nombre que apunta a una de las dos. La aplicación siempre pregunta a <code>docs</code>; cambiar de versión es mover el alias.</span>
+      <span><button type="button" class="term" data-term="s3">S3</button> guarda los documentos originales. Durante el reindexado solo se lee: de ahí salen los documentos para llenar <code>docs_v2</code>.</span>
     </div>
     <div id="bg"></div>
   </section>
@@ -195,8 +251,9 @@
   <section id="view-sizing" class="view" hidden aria-labelledby="sz-title">
     <div class="intro">
       <div>
+        <p class="eyebrow"><a href="#advanced">← Camino avanzado</a></p>
         <h1 id="sz-title">¿Cuánta memoria necesita el índice?</h1>
-        <p>Orden de magnitud para un índice HNSW en Qdrant. Sirve para decidir cuantización y para planear el doble de capacidad durante un reindexado blue-green.</p>
+        <p>Cada fragmento se guarda como un <button type="button" class="term" data-term="vector">vector</button> de cientos o miles de números, más un índice <button type="button" class="term" data-term="hnsw">HNSW</button> para buscar rápido. Mueve los controles para ver cuánta memoria ocupa y cuánto ahorra la <button type="button" class="term" data-term="cuantizacion">cuantización</button>.</p>
       </div>
     </div>
     <div id="sizing"></div>
@@ -217,6 +274,11 @@
   </section>
 </main>
 
+<dialog class="sheet" id="term-sheet" aria-labelledby="term-title">
+  <div class="sheet-head"><h2 id="term-title">Término</h2><button class="btn small" data-close>Cerrar</button></div>
+  <div class="sheet-body term-body" id="term-body"></div>
+</dialog>
+
 <footer class="foot">
   <p>Proyecto <code>projects/hybrid-rag-guide</code> · Contenido educativo; los resultados son simulados y no provienen de modelos reales.</p>
 </footer>
@@ -225,6 +287,7 @@
 <script src="assets/js/corpus.js"></script>
 <script src="assets/js/engine.js"></script>
 <script src="assets/js/systems.js"></script>
+<script src="assets/js/learn.js"></script>
 <script src="assets/js/app.js"></script>
 </body>
 </html>
