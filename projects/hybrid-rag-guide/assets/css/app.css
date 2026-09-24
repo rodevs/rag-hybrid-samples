@@ -427,6 +427,78 @@ table.t tr.dim td { color: var(--muted); }
   *, *::before, *::after { transition: none !important; animation: none !important; }
 }
 
+/* ------------------------------------------------------------ portada */
+.home { gap: var(--s-7); }
+.hero { display: grid; gap: var(--s-6); align-items: center; grid-template-columns: minmax(0, 1fr); padding-block: var(--s-4) 0; }
+@media (min-width: 1000px) { .hero { grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); } }
+.hero-copy { display: grid; gap: var(--s-4); }
+.hero h1 { font-size: clamp(1.9rem, 1.2rem + 2.6vw, 3.1rem); line-height: 1.05; max-width: 20ch; }
+.hero-sub { font-size: 1.1rem; color: var(--ink-2); max-width: 58ch; }
+.hero-actions { display: flex; flex-wrap: wrap; gap: var(--s-2); }
+.btn.big { padding: 11px 20px; font-size: 0.98rem; text-decoration: none; }
+.btn.ghost { background: transparent; }
+a.btn { text-decoration: none; }
+.hero-flow { margin: 0; display: grid; gap: 10px; padding: var(--s-5); background: var(--surface); border: 1px solid var(--line); border-radius: 18px; position: relative; }
+.hero-flow { gap: 20px; }
+.hf-row { display: flex; justify-content: center; }
+.hero-flow > * { position: relative; }
+.hero-flow > * + *::before { content: "↓"; position: absolute; top: -18px; left: 50%; transform: translateX(-50%); color: var(--muted); font-size: 0.85rem; line-height: 1; }
+.hf-split { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.hf { display: grid; justify-items: center; gap: 2px; text-align: center; padding: 10px 14px; border-radius: 12px; font-weight: 700; font-family: var(--f-display); width: 100%; max-width: 280px; background: var(--surface-2); }
+.hf small { font: 400 0.78rem var(--f-body); color: var(--ink-2); }
+.hf.q { background: var(--ink); color: var(--bg); }
+.hf.q small { color: inherit; }
+.hf.d { background: var(--dense-soft); box-shadow: inset 0 0 0 1.5px var(--dense); }
+.hf.s { background: var(--sparse-soft); box-shadow: inset 0 0 0 1.5px var(--sparse); }
+.hf.f { background: linear-gradient(90deg, var(--dense-soft), var(--sparse-soft)); }
+.hf.a { background: var(--accent); color: var(--accent-ink); }
+.hf.a small { color: inherit; opacity: 0.85; }
+
+.facts { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--s-3); grid-template-columns: repeat(auto-fit, minmax(min(100%, 200px), 1fr)); }
+.facts li { display: grid; gap: 2px; padding: var(--s-3) var(--s-4); border-top: 2px solid var(--accent); }
+.facts b { font-family: var(--f-display); font-size: 2.2rem; line-height: 1; font-variant-numeric: tabular-nums; }
+.facts span { color: var(--ink-2); font-size: 0.92rem; }
+
+.home-sec { display: grid; gap: var(--s-4); }
+.home-sec > h2 { font-size: clamp(1.35rem, 1.1rem + 1vw, 1.8rem); }
+.sec-intro { color: var(--ink-2); max-width: 72ch; }
+.why { display: grid; gap: var(--s-3); grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr)); }
+.why p { font-size: 1.02rem; max-width: 60ch; }
+.c-dense { color: var(--dense); }
+.c-sparse { color: var(--sparse); }
+
+.modules { display: grid; gap: var(--s-4); grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)); }
+.module { display: grid; gap: var(--s-2); align-content: start; padding: var(--s-4); background: var(--surface); border: 1px solid var(--line); border-radius: 14px; }
+.module ul { margin: 0; padding-left: 1.1em; display: grid; gap: 6px; color: var(--ink-2); font-size: 0.93rem; }
+.more-link { font-weight: 700; text-decoration: none; font-size: 0.9rem; }
+.more-links { display: flex; flex-wrap: wrap; gap: var(--s-3); }
+
+.journey { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 380px), 1fr)); }
+.jstep { display: grid; grid-template-columns: 30px minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--line); background: var(--surface); color: inherit; text-decoration: none; min-height: 56px; }
+.jstep:hover { border-color: var(--ink-2); }
+.jn { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; background: var(--surface-2); font: 600 0.78rem var(--f-mono); }
+.jstep.seen .jn { background: var(--accent-soft); color: var(--accent); }
+.jt { display: grid; gap: 1px; min-width: 0; }
+.jt small { color: var(--ink-2); font-size: 0.84rem; }
+
+.sys-group { display: grid; gap: var(--s-3); }
+.sys-group + .sys-group { margin-top: var(--s-5); }
+.sys-group > h3 { font-size: 1.1rem; }
+.sys-grid { display: grid; gap: var(--s-3); grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr)); }
+.sys { display: grid; gap: var(--s-2); align-content: start; padding: var(--s-4); background: var(--surface); border: 1px solid var(--line); border-radius: 14px; }
+.sys header { display: grid; gap: 2px; }
+.sys header a { font-family: var(--f-display); font-weight: 700; font-size: 1.05rem; color: var(--ink); text-decoration: none; }
+.sys header a:hover { color: var(--accent); }
+.sys header small { color: var(--muted); font-size: 0.78rem; }
+.sys p { font-size: 0.9rem; color: var(--ink-2); }
+.sys-tags { display: flex; flex-wrap: wrap; gap: 6px; }
+.tag-btn { border: 1px solid var(--line); background: var(--surface-2); color: var(--ink-2); border-radius: 999px; padding: 3px 10px; font-size: 0.76rem; font-weight: 600; cursor: pointer; }
+.tag-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+.how { display: grid; gap: var(--s-4); grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr)); }
+.how > div { display: grid; gap: var(--s-2); align-content: start; }
+.how p { color: var(--ink-2); font-size: 0.95rem; }
+
 /* ------------------------------------------------------------ piezas nuevas (todas las pantallas) */
 .tabs a svg { display: none; width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .tab-short { display: none; }
@@ -477,11 +549,16 @@ dialog.sheet::backdrop { background: rgb(8 12 10 / 55%); }
   /* navegación inferior al alcance del pulgar */
   .tabs {
     position: fixed; left: 0; right: 0; bottom: 0; z-index: 30;
-    display: grid; grid-template-columns: repeat(4, 1fr); gap: 2px;
+    display: grid; grid-template-columns: repeat(5, 1fr); gap: 2px;
     padding: 6px 6px calc(6px + env(safe-area-inset-bottom, 0px));
     background: var(--surface); border-top: 1px solid var(--line);
   }
-  .tabs a { display: grid; justify-items: center; align-content: center; gap: 2px; min-height: 52px; padding: 4px 2px; border-radius: 12px; font-size: 0.72rem; }
+  .tabs a { display: grid; justify-items: center; align-content: center; gap: 2px; min-height: 52px; padding: 4px 2px; border-radius: 12px; font-size: 0.7rem; }
+  .home { gap: var(--s-6); }
+  .hero-actions .btn { flex: 1 1 100%; justify-content: center; min-height: 48px; }
+  .jstep { grid-template-columns: 28px minmax(0, 1fr); }
+  .jstep .pill { display: none; }
+  .tag-btn { min-height: 34px; }
   .tabs a svg { display: block; }
   .tabs a[aria-current="page"] { background: var(--accent-soft); color: var(--accent); }
   .tab-long { display: none; }
