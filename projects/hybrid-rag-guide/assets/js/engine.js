@@ -4,8 +4,9 @@
  * Todo es determinista y corre en el navegador (o en Node para los tests):
  * - "Embeddings": vector de conceptos (sinónimos agrupados a mano) + dimensiones hash.
  *   Captura paráfrasis ("asueto" ≈ "vacaciones") pero es débil con códigos exactos.
- * - BM25: índice sparse con la parte de TF calculada al indexar y el IDF al consultar,
- *   igual que los sparse vectors de Qdrant con Modifier.IDF.
+ * - BM25: vector sparse por chunk con la TF saturada (como fastembed "Qdrant/bm25", con una
+ *   longitud promedio fija) y el IDF calculado "en el servidor" al consultar, como Qdrant
+ *   con Modifier.IDF. La búsqueda densa, BM25 y RRF equivalen a una llamada a la Query API.
  * - RRF, rerank (cross-encoder simulado), generación extractiva con citas y verificación.
  */
 (function (root, factory) {
@@ -160,7 +161,9 @@
   }
 
   // ---------------------------------------------------------------- índice
-  const BM25_K1 = 1.2, BM25_B = 0.75;
+  // avg_len fijo (fastembed usa uno configurable): así el vector sparse de un chunk no
+  // depende del resto del corpus y agregar documentos no obliga a recalcular los demás.
+  const BM25_K1 = 1.2, BM25_B = 0.75, BM25_AVG_LEN = 20;
 
   function idf(N, df) {
     return Math.log(1 + (N - df + 0.5) / (df + 0.5));
@@ -197,24 +200,20 @@
         });
       });
     }
-    // estadísticas BM25 y vector sparse (TF saturada; el IDF se aplica al consultar)
+    // vector sparse por chunk (TF saturada) + estadísticas que Qdrant mantiene para el IDF
     const df = new Map();
-    let totalLen = 0;
-    for (const p of points) {
-      totalLen += p.terms.length;
-      for (const t of new Set(p.terms)) df.set(t, (df.get(t) || 0) + 1);
-    }
-    const N = points.length, avgdl = N ? totalLen / N : 0;
+    for (const p of points) for (const t of new Set(p.terms)) df.set(t, (df.get(t) || 0) + 1);
+    const N = points.length;
     for (const p of points) {
       const tf = new Map();
       for (const t of p.terms) tf.set(t, (tf.get(t) || 0) + 1);
       const dl = p.terms.length;
       p.sparse = [...tf.entries()].map(([t, f]) => ({
-        term: t, index: fnv32(t, 7) % 65536,
-        value: (f * (BM25_K1 + 1)) / (f + BM25_K1 * (1 - BM25_B + BM25_B * dl / avgdl)),
+        term: t, index: sparseIndex(t),
+        value: (f * (BM25_K1 + 1)) / (f + BM25_K1 * (1 - BM25_B + BM25_B * dl / BM25_AVG_LEN)),
       })).sort((a, b) => a.index - b.index);
     }
-    return { name: cfg.name, config: cfg, dims: dimsOf(cfg.model), points, s3, documents, bm25: { df, N, avgdl } };
+    return { name: cfg.name, config: cfg, dims: dimsOf(cfg.model), points, s3, documents, bm25: { df, N, avgLen: BM25_AVG_LEN, k1: BM25_K1, b: BM25_B } };
   }
 
   function termIdf(index, t) {
@@ -413,6 +412,27 @@
     return t;
   }
 
+  // ---------------------------------------------------------------- llamada a Qdrant
+  const r3 = x => Math.round(x * 1000) / 1000;
+  const sparseIndex = t => fnv32(t, 7) % 65536;
+
+  /** Cuerpo de POST /collections/docs/points/query equivalente a la búsqueda simulada. */
+  function qdrantRequest(t, tenantId) {
+    const o = t.options;
+    const filter = { must: [{ key: 'tenant_id', match: { value: tenantId || 'acme' } }] };
+    const qterms = [...new Set(t.queryTerms)];
+    const dense = { query: t.qvec.map(r3), using: 'dense', filter, limit: o.candidates };
+    const bm25 = { query: { indices: qterms.map(sparseIndex), values: qterms.map(() => 1) }, using: 'bm25', filter, limit: o.candidates };
+    if (o.mode === 'dense') return Object.assign({}, dense, { with_payload: true });
+    if (o.mode === 'bm25') return Object.assign({}, bm25, { with_payload: true });
+    return {
+      prefetch: [dense, bm25],
+      query: { fusion: 'rrf' },
+      limit: o.candidates,
+      with_payload: true,
+    };
+  }
+
   // ---------------------------------------------------------------- evaluación
   /** Recall@k y MRR a nivel documento sobre un golden set. */
   function evaluate(index, golden, options) {
@@ -474,7 +494,7 @@
   return {
     normalize, stem, terms, rawTokens, contentHash, pointId, fnv32,
     CONCEPT_NAMES, MODELS, dimsOf, dimLabel, embed, cosine, conceptCosine,
-    chunkPages, buildIndex, termIdf, denseSearch, bm25Search, rrf, rerank,
+    chunkPages, buildIndex, termIdf, denseSearch, bm25Search, rrf, rerank, qdrantRequest, sparseIndex,
     SYSTEM_PROMPT, NO_ANSWER, buildPrompt, generate, verifyCitations,
     DEFAULTS, runQuery, evaluate, pca2, sizing,
   };

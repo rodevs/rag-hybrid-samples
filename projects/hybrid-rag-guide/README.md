@@ -56,7 +56,7 @@ hybrid-rag-guide/
 | Pieza real | Simulación en `engine.js` |
 |---|---|
 | Modelo de embeddings | Vector = dimensiones de "concepto" (grupos de sinónimos escritos a mano) + dimensiones hash, normalizado. Captura paráfrasis ("asueto" ≈ "vacaciones") y falla con códigos exactos, igual que un modelo real. Dos "modelos" con distinta dimensión para demostrar incompatibilidades. |
-| Vector sparse / BM25 | TF saturada (k1 = 1.2, b = 0.75) guardada al indexar; IDF aplicado al consultar, como `Modifier.IDF` en Qdrant. |
+| BM25 en Qdrant | Vector sparse `bm25` por chunk con TF saturada (k1 = 1.2, b = 0.75, longitud promedio fija como fastembed) e IDF calculado al consultar, como `Modifier.IDF`. La búsqueda densa, BM25 y RRF se muestran como la llamada equivalente a la Query API (`prefetch` + `fusion: rrf`). |
 | RRF | Implementación real: `Σ 1/(k + posición)`. |
 | Cross-encoder | Score 0–1 a partir de cobertura semántica, cobertura léxica ponderada por IDF y coincidencia de frases. |
 | LLM | Extractivo: elige las oraciones más relevantes de los fragmentos y las cita con `[n]`. Pone en cuarentena fragmentos con instrucciones embebidas. |

@@ -72,10 +72,10 @@
       lede: 'Cada página se corta en fragmentos de N palabras con un traslape para no partir ideas a la mitad. Un fragmento nunca cruza de una página a otra.',
       prod: ['Los modelos miden en tokens: en español una palabra equivale a 1.3–1.6 tokens aprox.', 'Cortar por estructura (títulos, párrafos) suele funcionar mejor que cortar cada N palabras.', 'Cambiar tamaño o traslape cambia todos los fragmentos: requiere un reindexado blue-green.'] },
     { id: 'embed', phase: 'index', title: 'Embeddings', io: ['Fragmento', 'Vector denso + vector sparse'], ref: 'Paso -1',
-      lede: 'Cada fragmento se guarda con dos representaciones: un vector denso que captura el significado y un vector sparse con los términos exactos para BM25.',
-      prod: ['Envía los textos a la API de embeddings en lotes y con reintentos.', 'Guarda en el payload qué modelo generó el vector.', 'Si cambias de modelo, los vectores viejos y nuevos no son comparables.'] },
+      lede: 'Cada fragmento se guarda con dos vectores en el mismo punto de Qdrant: "dense", que captura el significado, y "bm25", un vector sparse con los términos exactos y su frecuencia (lo genera fastembed con el modelo Qdrant/bm25, localmente y sin costo).',
+      prod: ['Envía los textos a la API de embeddings en lotes y con reintentos.', 'El vector sparse usa una longitud promedio fija: depende solo de su chunk y no hay que recalcularlo cuando llegan documentos nuevos.', 'Guarda en el payload qué modelo generó el vector.', 'Si cambias de modelo, los vectores viejos y nuevos no son comparables.'] },
     { id: 'store', phase: 'index', title: 'Almacenamiento', io: ['Vectores + metadata', 'Puntos en Qdrant, objetos en S3'], ref: 'Paso 11',
-      lede: 'La ingesta escribe en dos lugares. S3 guarda el original y el texto extraído. Qdrant guarda un punto por fragmento con su vector denso, su vector sparse y un payload con texto y metadata. La API consulta siempre el alias docs, nunca la colección física.',
+      lede: 'La ingesta escribe en dos lugares. S3 guarda el original y el texto extraído. Qdrant guarda un punto por fragmento con dos vectores con nombre (dense y bm25) y un payload con texto y metadata. BM25 no es un índice aparte: vive en la misma colección. La API consulta siempre el alias docs, nunca la colección física.',
       prod: ['IDs deterministas (uuid5 de doc_id:chunk_index): reingestar sobrescribe en vez de duplicar.', 'Crea índices de payload para doc_id y chunk_index (filtros y borrados).', 'Crea la colección versionada y su alias desde el primer día.'] },
     { id: 'question', phase: 'query', title: 'Pregunta', io: ['Texto de la persona', 'Términos normalizados'], ref: 'Paso 12',
       lede: 'La pregunta pasa por la misma normalización que los documentos: minúsculas, sin acentos, sin palabras vacías y con stemming. Elige un ejemplo o escribe tu propia pregunta.',
@@ -85,13 +85,13 @@
       prod: ['El modelo de la pregunta debe ser el mismo de la colección. Si cambias de modelo, cambia ambos a la vez (ver Reindexado blue-green).', 'Es un costo pequeño pero recurrente: uno por pregunta.'] },
     { id: 'dense', phase: 'query', title: 'Búsqueda densa', io: ['Vector de la pregunta', 'Top-N por similitud coseno'], ref: 'Paso 6',
       lede: 'Busca los fragmentos cuyo vector apunta en la dirección más parecida a la del vector de la pregunta (similitud coseno). Entiende paráfrasis, pero es débil con códigos y folios.',
-      prod: ['Con millones de vectores se usa un índice aproximado (HNSW): muy rápido a cambio de una pérdida mínima de precisión.', 'Aplica aquí el filtro por tenant.'] },
-    { id: 'bm25', phase: 'query', title: 'BM25', io: ['Términos de la pregunta', 'Top-N por coincidencia exacta'], ref: 'Paso 6',
-      lede: 'BM25 puntúa coincidencias exactas de términos. Cada término pesa según su IDF: los raros, como un folio, pesan más que los comunes. La parte de frecuencia se guardó al indexar y el IDF se aplica al consultar.',
-      prod: ['rank_bm25 en memoria no escala: usa vectores sparse de Qdrant con Modifier.IDF, u OpenSearch.', 'Configura el analizador para español (stemming y palabras vacías).'] },
-    { id: 'rrf', phase: 'query', title: 'Fusión RRF', io: ['Dos listas ordenadas', 'Una lista fusionada'], ref: 'Paso 6',
-      lede: 'RRF combina las dos listas usando solo la posición: cada fragmento suma 1/(k + posición) por cada lista donde aparece. Así no hay que comparar scores de escalas distintas.',
-      prod: ['k = 60 es el valor típico; un k bajo premia mucho el primer lugar.', 'Qdrant hace la fusión RRF en el servidor con la Query API y prefetch.'] },
+      prod: ['Es el prefetch "dense" de la llamada híbrida a Qdrant (ver etapa Fusión RRF).', 'Con millones de vectores se usa un índice aproximado (HNSW): muy rápido a cambio de una pérdida mínima de precisión.', 'El filtro por tenant va dentro del prefetch.'] },
+    { id: 'bm25', phase: 'query', title: 'BM25 en Qdrant', io: ['Términos de la pregunta', 'Top-N por coincidencia exacta'], ref: 'Paso 6',
+      lede: 'BM25 puntúa coincidencias exactas de términos. Corre dentro de Qdrant sobre el vector sparse "bm25": la frecuencia de cada término se guardó al indexar y Qdrant multiplica por el IDF, que calcula con las estadísticas de la colección (Modifier.IDF). Los términos raros, como un folio, pesan más.',
+      prod: ['Es el prefetch "bm25" de la misma llamada que la búsqueda densa.', 'Configura el analizador para español (stemming y palabras vacías).', 'OpenSearch solo si ya lo operas o necesitas sinónimos y diccionarios de dominio.'] },
+    { id: 'rrf', phase: 'query', title: 'Fusión RRF en Qdrant', io: ['Dos prefetch (dense y bm25)', 'Una lista fusionada'], ref: 'Paso 6',
+      lede: 'Qdrant combina las dos listas en el servidor usando solo la posición: cada fragmento suma 1/(k + posición) por cada lista donde aparece. Así no hay que comparar scores de escalas distintas. Búsqueda densa, BM25 y fusión son una sola llamada a la Query API.',
+      prod: ['k = 60 es el valor típico; revisa qué constante usa tu versión de Qdrant y si permite ajustarla.', 'Si necesitas otro k, pide las dos listas por separado y fusiona en tu código.'] },
     { id: 'rerank', phase: 'query', title: 'Reranking', io: ['Candidatos fusionados', 'Top-K sobre el umbral'], ref: 'Paso 6',
       lede: 'Un cross-encoder lee la pregunta y cada candidato juntos y les asigna un score de relevancia. Es más preciso y más caro, por eso solo reordena los candidatos ya fusionados. Lo que queda bajo el umbral no llega al LLM.',
       prod: ['Calibra el umbral con el golden set.', 'Si ningún candidato supera el umbral, responde "no lo sé" sin llamar al LLM.'] },
@@ -138,8 +138,9 @@
     const io = {
       parse: 'Escribe original y texto extraído en S3',
       store: 'Escribe: upsert de puntos + objetos en S3',
-      dense: 'Lee: vectores densos (índice HNSW)',
-      bm25: 'Lee: vectores sparse + estadísticas IDF',
+      dense: 'Lee: vector "dense" (índice HNSW)',
+      bm25: 'Lee: vector "bm25" (índice invertido) + IDF',
+      rrf: 'Fusiona en el servidor y devuelve una lista',
       rerank: 'Lee: payload (texto de cada candidato)',
       generate: 'Lee: payload (texto, fuente, página)',
     }[S.stage] || '';
@@ -155,8 +156,10 @@
       </div>
       <div class="map-phase"><span class="label">Fase 2 · Consulta</span>
         ${node(q[0])}${flow}${node(q[1])}${flow}
-        <div class="node-pair">${node(q[2], 'dense')}${node(q[3], 'sparse')}</div>${flow}
-        ${q.slice(4).map(s => node(s)).join(flow)}
+        <div class="qcall"><span class="label">Qdrant · una llamada a la Query API</span>
+          <div class="node-pair">${node(q[2], 'dense')}${node(q[3], 'sparse')}</div>${node(q[4])}
+        </div>${flow}
+        ${q.slice(5).map(s => node(s)).join(flow)}
       </div>`;
   }
 
@@ -221,6 +224,26 @@
   function slider(id, label, min, max, step, value, suffix) {
     return `<div class="field"><label for="${id}">${label}</label><div class="row"><input type="range" id="${id}" data-input="${id}" min="${min}" max="${max}" step="${step}" value="${value}"><output for="${id}">${value}${suffix || ''}</output></div></div>`;
   }
+  function qdrantCall() {
+    const req = E.qdrantRequest(S.trace, 'acme');
+    // JSON compacto: arreglos de números y objetos cortos en una línea; vector denso abreviado
+    const fmt = (v, ind) => {
+      const pad = '  '.repeat(ind + 1), end = '  '.repeat(ind);
+      if (Array.isArray(v) && v.every(x => typeof x !== 'object')) {
+        return v.length > 8 ? `[${v.slice(0, 6).join(', ')}, … ${v.length - 6} más]` : JSON.stringify(v).replace(/,/g, ', ');
+      }
+      const flat = JSON.stringify(v);
+      if (typeof v !== 'object' || v === null || flat.length <= 64) return flat.replace(/([,:])(?=["{\[\d])/g, '$1 ');
+      if (Array.isArray(v)) return `[\n${v.map(x => pad + fmt(x, ind + 1)).join(',\n')}\n${end}]`;
+      return `{\n${Object.entries(v).map(([k, x]) => `${pad}"${k}": ${fmt(x, ind + 1)}`).join(',\n')}\n${end}}`;
+    };
+    const json = fmt(req, 0);
+    const note = S.opts.mode === 'hybrid'
+      ? 'Los dos <code>prefetch</code> corren dentro de Qdrant (etapas 8 y 9) y <code>{"fusion": "rrf"}</code> los fusiona (etapa 10). El filtro de tenant va en cada prefetch.'
+      : `Modo ${esc(modeName(S.opts.mode))}: una sola búsqueda con <code>using: "${S.opts.mode}"</code>, sin fusión.`;
+    return `<pre class="code">POST /collections/docs/points/query\n${esc(json)}</pre><p class="panel-note">${note}</p>`;
+  }
+  const qdrantHint = () => `<div class="callout info"><span>Esta búsqueda no es un servicio aparte: es un <code>prefetch</code> de la llamada híbrida a Qdrant.</span><button class="btn small" data-stage="rrf" style="justify-self:start">Ver la llamada completa</button></div>`;
   const panel = (title, body, aside) => `<section class="panel"><h3><span>${title}</span>${aside ? `<span class="muted num" style="font-weight:400;font-size:.85rem">${aside}</span>` : ''}</h3>${body}</section>`;
 
   // ================================================================ render de etapas
@@ -304,7 +327,7 @@
         <span class="label">Vector denso (${p.vector.length} dims)</span>${vecStrip(p.vector, S.cfg.model)}
         <div class="vec-axis"><span>conceptos 0–${nC - 1}</span><span>hash ${nC}–${p.vector.length - 1}</span></div>
         <div class="concepts">${concepts.map(c => `<span class="pill dense">${esc(c.name)} ${fx(c.v, 2)}</span>`).join('') || '<span class="muted">Sin conceptos: solo dimensiones hash</span>'}</div>
-        <span class="label">Vector sparse para BM25 (${p.sparse.length} términos)</span>
+        <span class="label">Vector sparse "bm25" (${p.sparse.length} términos · TF saturada; el IDF lo aplica Qdrant)</span>
         <div class="tokens">${sparse.map(s => `<span class="tok stem" title="índice ${s.index}">${esc(s.term)} · ${fx(s.value, 2)}</span>`).join('')}</div>`) : ''}
       </div>` +
       panel('Prueba de similitud', `<div class="grid-2">
@@ -338,7 +361,7 @@
         ${obj ? (obj.body ? `<pre class="code wrap">${esc(JSON.stringify(obj.body, null, 2))}</pre>` : `<p class="panel-note">Archivo binario (PDF original). Es la fuente de verdad para reindexar si cambia el parser.</p>`) : '<p class="panel-note">Selecciona un objeto para ver su contenido.</p>'}`, `${ix.s3.length} objetos`)}
       <div style="display:grid;gap:var(--s-4);align-content:start">
         ${panel('Qdrant · alias', `<div class="table-wrap"><table class="t"><thead><tr><th>Alias</th><th>Colección física</th></tr></thead><tbody><tr><td class="mono">docs</td><td class="mono">${esc(ix.name)}</td></tr></tbody></table></div><p class="panel-note">La API consulta <code>docs</code>. Para reindexar se construye otra colección y se mueve el alias (pestaña Reindexado blue-green).</p>`)}
-        ${panel('Qdrant · configuración de la colección', `<pre class="code">${esc(JSON.stringify(collection, null, 2))}</pre><p class="panel-note">Memoria de este índice de juguete: ${ix.points.length} × ${ix.dims} dims × 4 B = <b>${bytes(ix.points.length * ix.dims * 4)}</b> en vectores. Calcula uno real en Dimensionamiento.</p>`)}
+        ${panel('Qdrant · configuración de la colección', `<pre class="code">${esc(JSON.stringify(collection, null, 2))}</pre><p class="panel-note">BM25 no es un índice aparte: es el vector sparse <code>bm25</code> de cada punto, y Qdrant mantiene las estadísticas de IDF de la colección. Memoria de este índice de juguete: ${ix.points.length} × ${ix.dims} dims × 4 B = <b>${bytes(ix.points.length * ix.dims * 4)}</b> en vectores. Calcula uno real en Dimensionamiento.</p>`)}
       </div></div>` +
       `<div class="grid-2">${panel('Qdrant · puntos', `<div class="table-wrap"><table class="t"><thead><tr><th>ID</th><th>Doc</th><th>Pág.</th><th>Chunk</th><th>Vector denso</th><th>Términos sparse</th></tr></thead><tbody>${rows}</tbody></table></div>`, `${ix.points.length} puntos`)}
       ${panel('Punto seleccionado', p ? `<pre class="code">${esc(pointJson)}</pre>` : '<p class="muted">Selecciona un punto.</p>')}</div>`;
@@ -388,7 +411,7 @@
     const t = S.trace;
     const off = S.opts.mode === 'bm25' ? '<div class="callout warn">El modo actual es "solo BM25": la búsqueda densa no se ejecuta. Cámbialo en la etapa Pregunta.</div>' : '';
     const max = t.dense.length ? t.dense[0].score : 1;
-    return off + panel('Candidatos', slider('cand', 'Candidatos por búsqueda (N)', 3, 15, 1, S.opts.candidates)) +
+    return off + qdrantHint() + panel('Candidatos', slider('cand', 'Límite de cada prefetch (N)', 3, 15, 1, S.opts.candidates)) +
       `<div class="grid-2">${panel('Resultados por similitud coseno', `<div class="results">${t.dense.map(r => resRow(r, { label: 'cos ' + fx(r.score), bar: Math.max(0, r.score) / (max || 1), cls: 'd' })).join('') || '<p class="muted">Sin resultados.</p>'}</div>`, `top ${t.dense.length}`)}
       ${panel('Vecinos en el mapa', scatter({ query: t.qvec, highlight: new Set(t.dense.slice(0, 5).map(r => r.point.id)) }) + '<p class="panel-note">Líneas: los 5 vecinos más cercanos de la pregunta.</p>')}</div>`;
   };
@@ -403,14 +426,20 @@
     }).join('');
     const max = t.bm25.length ? t.bm25[0].score : 1;
     const termSet = new Set(uniq);
-    return off + `<div class="grid-2">
+    return off + qdrantHint() + `<div class="grid-2">
       ${panel('Resultados BM25', `<div class="results">${t.bm25.map(r => resRow(r, {
         label: 'bm25 ' + fx(r.score, 2), bar: r.score / max, cls: 's', terms: termSet,
         extra: `<span class="tokens">${r.matched.map(m => `<span class="tok stem">${esc(m.term)}: ${fx(m.idf, 2)} × ${fx(m.value, 2)}</span>`).join('')}</span>`,
       })).join('') || '<div class="callout warn">Ningún fragmento contiene los términos exactos de la pregunta. Aquí BM25 no aporta nada y la búsqueda densa hace todo el trabajo.</div>'}</div>`, `top ${t.bm25.length}`)}
       ${panel('Peso de cada término (IDF)', `<div class="table-wrap"><table class="t"><thead><tr><th>Término</th><th>df</th><th>IDF</th><th></th></tr></thead><tbody>${idfRows}</tbody></table></div>
-        <p class="panel-note"><code>df</code> = en cuántos de los ${S.index.bm25.N} fragmentos aparece. IDF = ln(1 + (N − df + 0.5)/(df + 0.5)). Score = Σ IDF × TF saturada, con k1 = 1.2 y b = 0.75. Cada chip muestra IDF × TF.</p>`)}
-    </div>`;
+        <p class="panel-note"><code>df</code> = en cuántos de los ${S.index.bm25.N} fragmentos aparece. Qdrant lo mantiene y calcula IDF = ln(1 + (N − df + 0.5)/(df + 0.5)) al consultar. El vector sparse guardó la TF saturada (k1 = ${S.index.bm25.k1}, b = ${S.index.bm25.b}, longitud promedio fija = ${S.index.bm25.avgLen} términos). Score = Σ IDF × TF; cada chip muestra IDF × TF.</p>`)}
+    </div>` + panel('Por qué BM25 vive en Qdrant', `<div class="table-wrap"><table class="t"><thead><tr><th></th><th>rank_bm25 en memoria</th><th>Sparse BM25 en Qdrant</th></tr></thead><tbody>
+      <tr><td>Escala</td><td>Todo el corpus en la RAM de cada réplica</td><td>Índice invertido persistente</td></tr>
+      <tr><td>Documento nuevo</td><td>Reconstruir el índice completo</td><td>Un upsert; Qdrant actualiza el IDF</td></tr>
+      <tr><td>Consistencia con el denso</td><td>Otro índice que sincronizar</td><td>Mismo punto, mismo ID</td></tr>
+      <tr><td>Blue-green</td><td>Versionarlo por separado</td><td>Cambia con el alias</td></tr>
+      <tr><td>Fusión</td><td>En tu código</td><td>En el servidor, misma llamada</td></tr>
+      </tbody></table></div><p class="panel-note">Recomendación de la guía: sparse BM25 en Qdrant. OpenSearch solo si ya lo operas o necesitas análisis lingüístico avanzado.</p>`);
   };
 
   R.rrf = () => {
@@ -426,7 +455,8 @@
     }).join('');
     const top = t.fused[0];
     const example = top ? Object.entries(top.parts).map(([n, p]) => `1/(${k} + ${p.rank})`).join(' + ') + ` = ${fx(top.score, 4)}` : '';
-    return panel('Constante k', `${slider('rrfk', 'k de RRF', 1, 100, 1, k)}<p class="panel-note">Con k bajo, el primer lugar de cada lista pesa mucho más que el resto. Con k alto, aparecer en ambas listas importa más que la posición exacta.${example ? ` Primer lugar: <code>${esc(example)}</code>.` : ''}</p>`) +
+    return panel('La llamada a Qdrant', qdrantCall()) +
+      panel('Constante k', `${slider('rrfk', 'k de RRF', 1, 100, 1, k)}<p class="panel-note">Con k bajo, el primer lugar de cada lista pesa mucho más que el resto. Con k alto, aparecer en ambas listas importa más que la posición exacta.${example ? ` Primer lugar: <code>${esc(example)}</code>.` : ''} El control es para experimentar: en producción la constante la aplica Qdrant.</p>`) +
       panel('Lista fusionada', `<div class="legend"><span><i style="background:var(--dense)"></i>aporte de la búsqueda densa</span><span><i style="background:var(--sparse)"></i>aporte de BM25</span></div>
         <div class="table-wrap"><table class="t"><thead><tr><th>#</th><th>Fragmento</th><th>Pos. densa</th><th>Aporte</th><th>Pos. BM25</th><th>Aporte</th><th>RRF</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`, `${t.fused.length} candidatos`);
   };
@@ -798,7 +828,7 @@
     const miss = col.status === 'deleted' ? [] : missingIn(col);
     return `<div class="box ${BG.alias === name ? 'live' : ''} ${col.status === 'deleted' ? 'gone' : ''}">
       <h4>${name} ${st} ${BG.alias === name ? '<span class="alias-pill">◀ alias docs</span>' : ''}</h4>
-      <dl><dt>Chunking</dt><dd>${col.cfg.size} palabras / ${col.cfg.overlap} traslape</dd><dt>Modelo</dt><dd>${col.cfg.model} (${E.dimsOf(col.cfg.model)} dims)</dd>
+      <dl><dt>Chunking</dt><dd>${col.cfg.size} palabras / ${col.cfg.overlap} traslape</dd><dt>Vectores</dt><dd>dense (${col.cfg.model}, ${E.dimsOf(col.cfg.model)} dims) + bm25 (sparse)</dd>
       <dt>Contenido</dt><dd>${col.docs.length} docs · ${col.index ? col.index.points.length : 0} puntos</dd>
       <dt>Memoria</dt><dd>${col.index ? bytes(col.index.points.length * E.dimsOf(col.cfg.model) * 4) : '0 B'}</dd></dl>
       ${col.status === 'building' ? `<div class="progress" role="progressbar" aria-valuenow="${Math.round(col.progress * 100)}" aria-valuemin="0" aria-valuemax="100"><i style="width:${col.progress * 100}%"></i></div>` : ''}
