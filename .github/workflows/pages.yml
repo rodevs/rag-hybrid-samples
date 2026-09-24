@@ -1,0 +1,48 @@
+name: pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "projects/**"
+      - "scripts/build-pages.sh"
+      - ".github/workflows/pages.yml"
+  pull_request:
+    paths:
+      - "projects/**"
+      - "scripts/build-pages.sh"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Generar sitio
+        run: bash scripts/build-pages.sh _site
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  # En los PR solo se valida que el sitio se genere; se publica al llegar a main.
+  deploy:
+    if: github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
