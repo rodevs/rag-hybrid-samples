@@ -103,10 +103,12 @@ PDF → texto → chunks → embeddings ─┐        pregunta ─┬─→ embe
 - **Reranking:** como solo evalúa el top-20/50 recuperado, no escala con el tamaño total del
   índice — lo que sí lo penaliza es más tráfico (más queries por segundo), porque cada query
   paga su propio costo de rerank.
-- **BM25:** 🔧 **Corregido** — una librería en memoria como `rank_bm25` **no escala** a
-  millones de chunks (reconstruye todo el índice en RAM, no se persiste, no se comparte entre
-  réplicas). A esa escala BM25 debe vivir en un motor con índice invertido persistente:
-  sparse vectors de Qdrant (recomendado aquí, ver Paso 6B), OpenSearch/Elasticsearch, etc.
+- **BM25:** 🔧 **Corregido** — la versión original usaba `rank_bm25`, una librería que
+  reconstruye todo el índice en RAM, no se persiste y no se comparte entre réplicas: no escala
+  a millones de chunks. **En esta guía BM25 vive en Qdrant** como un vector sparse por chunk,
+  en la misma colección que el vector denso, y Qdrant aplica el IDF y la fusión RRF en el
+  servidor (ver Paso 6). Es un índice invertido persistente que escala igual que el resto de
+  la colección.
 
 > 📝 **Dimensionamiento (orden de magnitud):** un vector de 1536 dimensiones en `float32`
 > ocupa 1536 × 4 B ≈ 6 KB. Con 10 M chunks son **≈ 60 GB solo en vectores**, más el grafo
@@ -187,11 +189,10 @@ rag-hybrid/
 │   │   ├── parser.py        # PDF → texto por página
 │   │   ├── chunker.py
 │   │   ├── storage.py       # originales + texto extraído en S3
+│   │   ├── embeddings.py    # vector denso (API) + vector sparse BM25 (fastembed)
 │   │   └── pipeline.py
 │   ├── retrieval/
-│   │   ├── dense.py
-│   │   ├── sparse_bm25.py   # (opción A) BM25 en memoria, solo para prototipo
-│   │   ├── hybrid.py        # RRF + rerank
+│   │   ├── hybrid.py        # una llamada a Qdrant: prefetch dense + bm25, fusión RRF
 │   │   └── rerank.py
 │   ├── llm/
 │   │   ├── generate.py
@@ -222,7 +223,7 @@ cd rag-hybrid && python3 -m venv .venv && source .venv/bin/activate
 # requirements.txt
 fastapi
 uvicorn[standard]
-qdrant-client[fastembed]   # fastembed: sparse BM25 para la opción 6B
+qdrant-client[fastembed]   # fastembed: genera los vectores sparse BM25 (modelo Qdrant/bm25)
 openai
 cohere                     # 🔧 faltaba (rerank)
 boto3                      # 🔧 faltaba (S3, Paso 11)
@@ -414,27 +415,75 @@ def chunk_pages(pages: list[dict], size: int = 400, overlap: int = 50,
     return out
 ```
 
-### 5.3 Colección + alias desde el día uno
+### 5.3 Colección híbrida + alias desde el día uno
 
 🔧 **Corregido (crítico):** la versión original creaba una colección llamada `docs`, y el
 Paso 11 luego necesita un **alias** `docs`. Qdrant no permite un alias con el nombre de una
 colección existente, así que el blue-green era imposible sin migrar. Se crea `docs_v1` y el
 alias `docs` apunta a ella.
 
+La colección guarda **dos vectores por punto**, con nombre:
+
+| Vector | Tipo | Qué guarda | Lo genera |
+|---|---|---|---|
+| `dense` | denso, `size = dims del modelo`, coseno | el significado del chunk | API de embeddings (OpenAI, Voyage, etc.) |
+| `bm25` | sparse, `modifier = IDF` | cada término del chunk con su frecuencia saturada (TF) | `fastembed` con el modelo `Qdrant/bm25`, localmente y sin costo |
+
+Con `Modifier.IDF`, **Qdrant calcula el IDF en el servidor** con las estadísticas de la
+colección y lo aplica al consultar. Por eso cada vector sparse depende solo de su propio
+chunk: agregar o borrar documentos actualiza el IDF automáticamente y no obliga a recalcular
+los vectores de los demás.
+
+```python
+# app/ingestion/embeddings.py
+from fastembed import SparseTextEmbedding
+from openai import OpenAI
+from qdrant_client.models import SparseVector
+from tenacity import retry, stop_after_attempt, wait_exponential
+from app.config import settings
+
+client = OpenAI(api_key=settings.openai_api_key)
+# Analizador BM25: stemming y palabras vacías según idioma. Verifica en tu versión de fastembed
+# el nombre del parámetro de idioma y el valor de avg_len (longitud promedio fija que usa para
+# normalizar el TF sin depender del resto del corpus).
+bm25 = SparseTextEmbedding("Qdrant/bm25", language="spanish")
+
+@retry(stop=stop_after_attempt(5), wait=wait_exponential(min=1, max=30))
+def _embed_batch(texts: list[str], model: str) -> list[list[float]]:
+    resp = client.embeddings.create(model=model, input=texts)
+    return [d.embedding for d in resp.data]
+
+def embed_dense(texts: list[str], model: str = settings.embedding_model,
+                batch_size: int = 128) -> list[list[float]]:
+    # 🔧 la API limita nº de inputs y tokens por request: se manda en lotes
+    out: list[list[float]] = []
+    for i in range(0, len(texts), batch_size):
+        out.extend(_embed_batch(texts[i:i + batch_size], model))
+    return out
+
+def embed_sparse(texts: list[str]) -> list[SparseVector]:
+    """Vector sparse BM25 de cada chunk (índices = términos, valores = TF saturada)."""
+    return [SparseVector(indices=e.indices.tolist(), values=e.values.tolist())
+            for e in bm25.embed(texts)]
+
+def embed_sparse_query(text: str) -> SparseVector:
+    """La pregunta usa query_embed: cada término con peso 1; el IDF lo pone Qdrant."""
+    e = next(bm25.query_embed(text))
+    return SparseVector(indices=e.indices.tolist(), values=e.values.tolist())
+```
+
 ```python
 # app/ingestion/pipeline.py
 import uuid
-from openai import OpenAI
 from qdrant_client import QdrantClient
 from qdrant_client.models import (
-    PointStruct, VectorParams, Distance, PayloadSchemaType,
+    PointStruct, VectorParams, SparseVectorParams, Modifier, Distance, PayloadSchemaType,
     CreateAliasOperation, CreateAlias,
 )
-from tenacity import retry, stop_after_attempt, wait_exponential
 from app.config import settings
 from app.ingestion.chunker import chunk_pages
+from app.ingestion.embeddings import embed_dense, embed_sparse
 
-client = OpenAI(api_key=settings.openai_api_key)
 qdrant = QdrantClient(url=settings.qdrant_url, api_key=settings.qdrant_api_key)
 
 POINT_NS = uuid.UUID("6f1c3a52-0000-4000-8000-000000000000")  # fija, cualquier UUID
@@ -444,11 +493,14 @@ def ensure_collection(name: str = settings.collection_version,
     if qdrant.collection_exists(name):
         return
     qdrant.create_collection(
-        name, vectors_config=VectorParams(size=dims, distance=Distance.COSINE),
+        name,
+        vectors_config={"dense": VectorParams(size=dims, distance=Distance.COSINE)},
+        sparse_vectors_config={"bm25": SparseVectorParams(modifier=Modifier.IDF)},
     )
-    # índices de payload: necesarios para filtrar/borrar por doc_id y rango de chunk
+    # índices de payload: necesarios para filtrar/borrar por doc_id, rango de chunk y tenant
     qdrant.create_payload_index(name, "doc_id", PayloadSchemaType.KEYWORD)
     qdrant.create_payload_index(name, "chunk_index", PayloadSchemaType.INTEGER)
+    qdrant.create_payload_index(name, "tenant_id", PayloadSchemaType.KEYWORD)
     # en la primera versión, crea el alias estable que usa la API
     existing = {a.alias_name for a in qdrant.get_aliases().aliases}
     if settings.collection_alias not in existing:
@@ -457,23 +509,31 @@ def ensure_collection(name: str = settings.collection_version,
                 collection_name=name, alias_name=settings.collection_alias)),
         ])
 
-@retry(stop=stop_after_attempt(5), wait=wait_exponential(min=1, max=30))
-def _embed_batch(texts: list[str], model: str) -> list[list[float]]:
-    resp = client.embeddings.create(model=model, input=texts)
-    return [d.embedding for d in resp.data]
-
-def embed(texts: list[str], model: str = settings.embedding_model,
-          batch_size: int = 128) -> list[list[float]]:
-    # 🔧 la API limita nº de inputs y tokens por request: se manda en lotes
-    out: list[list[float]] = []
-    for i in range(0, len(texts), batch_size):
-        out.extend(_embed_batch(texts[i:i + batch_size], model))
-    return out
-
 def point_id(doc_id: str, chunk_index: int) -> str:
     # 🔧 Qdrant solo acepta enteros sin signo o UUID como ID.
     # uuid5 es determinista: re-ingestar el mismo doc sobreescribe los mismos puntos.
     return str(uuid.uuid5(POINT_NS, f"{doc_id}:{chunk_index}"))
+
+def upsert_chunks(collection: str, doc_id: str, chunks: list[dict], metadata: dict,
+                  model: str = settings.embedding_model) -> int:
+    texts = [c["text"] for c in chunks]
+    dense = embed_dense(texts, model)
+    sparse = embed_sparse(texts)
+    points = [
+        PointStruct(
+            id=point_id(doc_id, i),
+            vector={"dense": d, "bm25": sp},
+            payload={
+                "text": c["text"], "page": c["page"],
+                "doc_id": doc_id, "chunk_index": i,
+                "embedding_model": model,                  # trazabilidad
+                **metadata,
+            },
+        )
+        for i, (c, d, sp) in enumerate(zip(chunks, dense, sparse))
+    ]
+    qdrant.upsert(collection_name=collection, points=points)
+    return len(points)
 
 def ingest_pages(doc_id: str, pages: list[dict], metadata: dict,
                  collection: str = settings.collection_version) -> int:
@@ -481,82 +541,92 @@ def ingest_pages(doc_id: str, pages: list[dict], metadata: dict,
     chunks = chunk_pages(pages, settings.chunk_size, settings.chunk_overlap)
     if not chunks:
         raise ValueError("documento sin texto extraíble (¿PDF escaneado?)")
-    vectors = embed([c["text"] for c in chunks])
-    points = [
-        PointStruct(
-            id=point_id(doc_id, i),
-            vector=vec,
-            payload={
-                "text": c["text"], "page": c["page"],
-                "doc_id": doc_id, "chunk_index": i,
-                "embedding_model": settings.embedding_model,   # trazabilidad
-                **metadata,
-            },
-        )
-        for i, (c, vec) in enumerate(zip(chunks, vectors))
-    ]
-    qdrant.upsert(collection_name=collection, points=points)
-    return len(points)
+    return upsert_chunks(collection, doc_id, chunks, metadata)
 ```
 
 > 📝 **Observación:** la ingesta escribe en la **colección física** (`docs_v1`); la API de
 > consulta lee del **alias** (`docs`). Así, el reindexado del Paso 11 solo cambia a qué
-> colección apunta el alias.
+> colección apunta el alias, y como el vector BM25 vive en la misma colección, cambia junto
+> con el denso.
 
 ---
 
-## Paso 6 — Retrieval híbrido (dense + BM25 + RRF + rerank)
+## Paso 6 — Retrieval híbrido en Qdrant (dense + BM25 + RRF) y rerank
 
-Hay dos formas de implementarlo. La **6A** (la de la guía original, corregida) sirve para
-aprender y para prototipos pequeños. La **6B** es la recomendada para producción.
+### Decisión: BM25 como vector sparse en Qdrant, con fusión RRF en el servidor
 
-### 6A — BM25 en memoria + RRF en Python (prototipo)
+🔧 **Corregido:** la versión original armaba BM25 con `rank_bm25` en memoria y fusionaba en
+Python. Esta guía usa **una sola implementación**: la búsqueda densa, BM25 y la fusión RRF
+ocurren **dentro de Qdrant, en una sola llamada** a la Query API (`query_points` con dos
+`prefetch` y `FusionQuery(Fusion.RRF)`, disponible desde Qdrant 1.10).
+
+| Criterio | `rank_bm25` en memoria (original) | **Sparse BM25 en Qdrant (recomendado)** | OpenSearch / Elasticsearch |
+|---|---|---|---|
+| Escala | Todo el corpus en la RAM de cada réplica; se reconstruye completo en cada cambio | Índice invertido persistente, igual que el resto de la colección | Escala bien |
+| Actualización | Hay que reconstruir el índice con cada documento nuevo | Cada `upsert` actualiza el índice; Qdrant recalcula el IDF | Por documento |
+| Consistencia con el denso | Otro índice que sincronizar; puede quedar desfasado | Mismo punto, mismo ID, misma transacción | Otro sistema que sincronizar |
+| Blue-green (Paso 11) | Hay que versionar y cambiar BM25 por separado | Viaja en la misma colección: el alias cambia ambos a la vez | Alias propio, en paralelo al de Qdrant |
+| Filtro por tenant | Hay que implementarlo aparte | El mismo filtro de payload en ambos `prefetch` | Filtro propio |
+| Piezas que operar | Ninguna extra, pero no sirve en producción | **Ninguna extra** | Un clúster más |
+| Análisis de texto | Lo que programes | Stemming y palabras vacías por idioma (fastembed) | El más completo: sinónimos, diccionarios, analizadores |
+
+**Cuándo elegir OpenSearch en su lugar:** si ya existe en tu organización o si necesitas
+análisis lingüístico avanzado (sinónimos de dominio, diccionarios, *highlighting* complejo).
+En ese caso haces dos consultas (Qdrant para el denso, OpenSearch para BM25) y fusionas en
+tu código con la función de 6.2.
+
+`rank_bm25` queda solo para experimentos en un notebook; no lo uses en el servicio.
+
+### 6.1 Consulta híbrida: una llamada
 
 ```python
-# app/retrieval/dense.py
+# app/retrieval/hybrid.py
+from qdrant_client.models import (
+    Prefetch, FusionQuery, Fusion, Filter, FieldCondition, MatchValue,
+)
 from app.config import settings
-from app.ingestion.pipeline import qdrant, embed
+from app.ingestion.pipeline import qdrant
+from app.ingestion.embeddings import embed_dense, embed_sparse_query
 
-def dense_search(query: str, k: int = 20, tenant_id: str | None = None) -> list[dict]:
-    qvec = embed([query])[0]
-    hits = qdrant.query_points(
-        collection_name=settings.collection_alias,   # siempre el alias
-        query=qvec, limit=k, with_payload=True,
-        # query_filter=Filter(must=[FieldCondition(key="tenant_id", match=MatchValue(value=tenant_id))])
-    ).points
-    return [{"id": str(h.id), **h.payload} for h in hits]
+def hybrid_candidates(query: str, tenant_id: str, limit: int = 20) -> list[dict]:
+    # el filtro de tenant va en CADA prefetch: así ninguna de las dos búsquedas
+    # devuelve chunks de otro tenant
+    tenant = Filter(must=[FieldCondition(key="tenant_id", match=MatchValue(value=tenant_id))])
+    result = qdrant.query_points(
+        collection_name=settings.collection_alias,          # siempre el alias
+        prefetch=[
+            Prefetch(query=embed_dense([query])[0], using="dense", filter=tenant, limit=limit),
+            Prefetch(query=embed_sparse_query(query), using="bm25", filter=tenant, limit=limit),
+        ],
+        query=FusionQuery(fusion=Fusion.RRF),               # fusión en el servidor
+        limit=limit,
+        with_payload=True,
+    )
+    return [{"id": str(p.id), "rrf_score": p.score, **p.payload} for p in result.points]
 ```
 
-```python
-# app/retrieval/sparse_bm25.py
-import re
-from rank_bm25 import BM25Okapi
+Lo que pasa dentro de esa llamada:
 
-_TOKEN = re.compile(r"\w+", re.UNICODE)
+1. `prefetch` **dense**: los `limit` vecinos más cercanos por coseno, usando el índice HNSW.
+2. `prefetch` **bm25**: los `limit` chunks con mayor Σ IDF × TF de los términos de la
+   pregunta, usando el índice invertido. El IDF lo calcula Qdrant con la colección actual.
+3. **RRF**: Qdrant fusiona ambas listas por posición y devuelve una sola lista ordenada.
 
-def tokenize(text: str) -> list[str]:
-    # 🔧 el original usaba .split(): "Folio:" y "folio" eran términos distintos
-    return _TOKEN.findall(text.lower())
+Para evaluar cada componente por separado (Paso 9), consulta un solo vector:
+`query_points(..., query=embed_dense([q])[0], using="dense")` o
+`query_points(..., query=embed_sparse_query(q), using="bm25")`.
 
-class BM25Index:
-    """Solo para prototipo: vive en RAM, se reconstruye completo y no se comparte
-    entre réplicas. El corpus debe cargarse (scroll) de la misma colección que dense."""
-    def __init__(self, corpus: list[dict]):   # cada item: {"id", "text", ...}
-        self.corpus = corpus
-        self.bm25 = BM25Okapi([tokenize(c["text"]) for c in corpus])
+### 6.2 Qué hace RRF por dentro
 
-    def search(self, query: str, k: int = 20) -> list[dict]:
-        scores = self.bm25.get_scores(tokenize(query))
-        ranked = sorted(zip(self.corpus, scores), key=lambda x: -x[1])[:k]
-        return [c for c, s in ranked if s > 0]
-```
+No necesitas esta función en el servicio: Qdrant ya fusiona. Sirve para entender el cálculo,
+para escribir tests y para fusionar resultados de dos sistemas distintos (por ejemplo, Qdrant
++ OpenSearch).
 
 🔧 **Corregido (crítico):** el RRF original usaba la clave `doc_id_chunk`, que no existe en
 ningún resultado (`KeyError`), empezaba la posición en 0, y devolvía solo `(id, score)`,
 perdiendo el texto que necesita el reranker.
 
 ```python
-# app/retrieval/hybrid.py
 def reciprocal_rank_fusion(result_lists: list[list[dict]], k: int = 60) -> list[dict]:
     scores: dict[str, float] = {}
     items: dict[str, dict] = {}
@@ -567,73 +637,12 @@ def reciprocal_rank_fusion(result_lists: list[list[dict]], k: int = 60) -> list[
             items[key] = item
     ranked = sorted(scores, key=scores.get, reverse=True)
     return [{**items[i], "rrf_score": scores[i]} for i in ranked]
-
-def hybrid_search(query: str, dense_fn, sparse_fn, rerank_fn=None,
-                  candidates: int = 20, top_k: int = 5) -> list[dict]:
-    fused = reciprocal_rank_fusion([dense_fn(query, candidates),
-                                    sparse_fn(query, candidates)])[:candidates]
-    if rerank_fn:
-        return rerank_fn(query, fused, top_k)
-    return fused[:top_k]
 ```
 
-### 6B — Híbrido nativo en Qdrant (recomendado)
-
-📝 **Observación:** desde Qdrant 1.10, una colección puede tener vectores densos **y**
-sparse con modificador IDF (BM25), y la Query API hace la fusión RRF en el servidor. Ventajas
-frente a 6A: un solo almacén persistente y escalable, BM25 se actualiza con cada upsert, y
-se versiona junto con el denso bajo el mismo alias (el Paso 11 queda cubierto sin trabajo
-extra).
-
-```python
-# creación de colección (sustituye a ensure_collection de 5.3)
-from qdrant_client.models import SparseVectorParams, Modifier
-
-qdrant.create_collection(
-    "docs_v1",
-    vectors_config={"dense": VectorParams(size=1536, distance=Distance.COSINE)},
-    sparse_vectors_config={"bm25": SparseVectorParams(modifier=Modifier.IDF)},
-)
-```
-
-```python
-# ingesta: además del denso, genera el vector sparse BM25
-from fastembed import SparseTextEmbedding
-bm25_model = SparseTextEmbedding("Qdrant/bm25")
-
-sparse = list(bm25_model.embed(texts))
-PointStruct(
-    id=point_id(doc_id, i),
-    vector={"dense": dense_vec,
-            "bm25": SparseVector(indices=sparse[i].indices.tolist(),
-                                 values=sparse[i].values.tolist())},
-    payload={...},
-)
-```
-
-```python
-# consulta: dense + BM25 + RRF en una sola llamada
-from qdrant_client.models import Prefetch, FusionQuery, Fusion, SparseVector
-
-q_sparse = next(bm25_model.query_embed(query))
-result = qdrant.query_points(
-    collection_name="docs",                         # alias
-    prefetch=[
-        Prefetch(query=embed([query])[0], using="dense", limit=20),
-        Prefetch(query=SparseVector(indices=q_sparse.indices.tolist(),
-                                    values=q_sparse.values.tolist()),
-                 using="bm25", limit=20),
-    ],
-    query=FusionQuery(fusion=Fusion.RRF),
-    limit=20,
-    with_payload=True,
-)
-candidates = [{"id": str(p.id), **p.payload} for p in result.points]
-```
-
-> 📝 El modelo `Qdrant/bm25` aplica stemming según idioma; configúralo para español si tus
-> documentos lo están. Si necesitas analizadores lingüísticos avanzados (sinónimos,
-> diccionarios de dominio), OpenSearch es la alternativa, a costa de una pieza más que operar.
+> 📝 **La constante k:** la literatura usa k = 60. Qdrant aplica RRF con su propia constante;
+> revisa en la documentación de tu versión cuál usa y si permite ajustarla. Si necesitas un
+> `k` que tu versión no permite, pide las dos listas por separado (dos `query_points` o
+> `query_batch_points`) y fusiona con esta función.
 
 ### 6.3 Reranking
 
@@ -720,7 +729,7 @@ def ready():
 
 ### 7.2 `/query` — 🔧 faltaba (el checklist lo daba por hecho)
 
-> Snippets ilustrativos: `require_user`, `QueryRequest`, `hybrid_candidates` (6A o 6B),
+> Snippets ilustrativos: `require_user`, `QueryRequest`, `hybrid_candidates` (Paso 6.1),
 > `llm_complete` (cliente del proveedor de LLM) y `MIN_RERANK_SCORE` (se calibra con el
 > golden set del Paso 9) se definen según tu stack.
 
@@ -753,7 +762,7 @@ def verify_citations(answer: str, n_chunks: int) -> tuple[bool, set[int]]:
 # app/main.py (continuación)
 @app.post("/query")
 def query(req: QueryRequest, user=Depends(require_user)):
-    candidates = hybrid_candidates(req.question, tenant_id=user.tenant_id)  # 6A o 6B
+    candidates = hybrid_candidates(req.question, tenant_id=user.tenant_id)  # Paso 6.1
     top = cohere_rerank(req.question, candidates, top_k=5)
     if not top or top[0]["rerank_score"] < MIN_RERANK_SCORE:
         return {"answer": "No lo sé con la información disponible.", "sources": []}
@@ -1210,9 +1219,9 @@ no puedes atribuir a nada.
 La solución es el patrón **blue-green**: construyes el índice nuevo completo en paralelo, sin
 tocar el que está en producción, lo validas, y luego cambias el tráfico de forma atómica.
 
-> 📝 Con la opción 6B (sparse en Qdrant), el índice BM25 viaja **dentro** de la misma
-> colección y se versiona automáticamente. Con la opción 6A, tendrías que versionar y
-> cambiar el índice BM25 en memoria por separado — otra razón para preferir 6B.
+> 📝 El vector sparse BM25 vive en la **misma colección** que el denso (Paso 5.3), así que se
+> versiona y cambia con el mismo alias. Cambiar el analizador BM25 (idioma, palabras vacías,
+> modelo sparse) también es un cambio de estrategia y requiere este mismo proceso.
 
 ### 11.2 Proceso paso a paso
 
@@ -1254,7 +1263,7 @@ el cambio es de parser, re-parsea desde el PDF; si no, lee directamente el JSON.
 import json, boto3
 from app.config import INDEX_CONFIGS
 from app.ingestion.chunker import chunk_pages
-from app.ingestion.pipeline import embed, upsert_chunks   # upsert_chunks: arma PointStruct como en 5.3
+from app.ingestion.pipeline import upsert_chunks   # genera dense + bm25 y hace upsert (Paso 5.3)
 
 s3 = boto3.client("s3")
 
@@ -1263,8 +1272,7 @@ def reindex_doc(bucket: str, doc_id: str, target: str):
     obj = s3.get_object(Bucket=bucket, Key=f"extracted/{doc_id}.json")
     doc = json.loads(obj["Body"].read())                 # {"pages": [...], "metadata": {...}}
     chunks = chunk_pages(doc["pages"], cfg["size"], cfg["overlap"], cfg["strategy"])
-    vectors = embed([c["text"] for c in chunks], model=cfg["embedding_model"])
-    upsert_chunks(target, doc_id, chunks, vectors, doc["metadata"])
+    upsert_chunks(target, doc_id, chunks, doc["metadata"], model=cfg["embedding_model"])
 ```
 
 - **Para millones de documentos:** 🔧 un job de GitHub Actions en runners hospedados dura
@@ -1458,7 +1466,7 @@ el contenido.
 - [ ] Dimensionamiento de memoria calculado; cuantización evaluada
 
 **Retrieval y generación**
-- [ ] Dense + BM25 + RRF funcionando en `/query` (idealmente híbrido nativo en Qdrant)
+- [ ] Híbrido en una llamada a Qdrant (`prefetch` dense + bm25, `Fusion.RRF`) funcionando en `/query`, con filtro de tenant en ambos `prefetch`
 - [ ] Reranking top-20 → top-5 con umbral mínimo de score
 - [ ] Verificación de citas post-generación y respuesta "no lo sé" cuando no hay contexto
 

@@ -79,6 +79,24 @@ test('modelo de query distinto al de la colección falla por dimensión', () => 
   assert.throws(() => E.runQuery(index, 'hola', { queryModel: 'mock-embed-large' }), { code: 'DIM_MISMATCH' });
 });
 
+test('el vector sparse de un chunk no depende del resto del corpus', () => {
+  const alone = E.buildIndex([C.DOCS[0]], {});
+  const p = alone.points[0];
+  const q = index.points.find(x => x.id === p.id);
+  assert.deepEqual(p.sparse, q.sparse);
+});
+
+test('la búsqueda híbrida equivale a una llamada a la Query API de Qdrant', () => {
+  const t = E.runQuery(index, sample('codigo'));
+  const req = E.qdrantRequest(t, 'acme');
+  assert.deepEqual(req.prefetch.map(p => p.using), ['dense', 'bm25']);
+  assert.deepEqual(req.query, { fusion: 'rrf' });
+  assert.ok(req.prefetch.every(p => p.filter.must[0].key === 'tenant_id'));
+  const folio = req.prefetch[1].query.indices.includes(E.sparseIndex('f-2024-0117'));
+  assert.ok(folio);
+  assert.equal(E.qdrantRequest(E.runQuery(index, 'hola', { mode: 'dense' })).using, 'dense');
+});
+
 test('evaluación sobre el golden set', () => {
   const r = E.evaluate(index, C.GOLDEN, {});
   assert.ok(r.recall >= 0.9, `recall=${r.recall}`);

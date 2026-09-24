@@ -172,6 +172,8 @@ textarea { resize: vertical; min-height: 90px; }
 .node-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
 .node-pair .node { grid-template-columns: 1fr; }
 .node-pair .node-n { display: none; }
+.qcall { display: grid; gap: 6px; padding: 8px; border: 1px dashed var(--accent); border-radius: var(--r); }
+.qcall > .label { color: var(--accent); }
 .flow { height: 10px; width: 2px; background: var(--line); margin-left: 18px; }
 .storebox { display: grid; gap: 6px; padding: 10px; border: 1px dashed var(--line); border-radius: var(--r); background: var(--surface-2); }
 .storebox.active { border-color: var(--accent); border-style: solid; }
@@ -183,7 +185,8 @@ textarea { resize: vertical; min-height: 90px; }
 
 @media (max-width: 999px) {
   .map { display: flex; gap: 6px; overflow-x: auto; padding: 8px; scroll-snap-type: x proximity; }
-  .map-phase, .node-pair, .storebox { display: flex; gap: 6px; align-items: stretch; }
+  .map-phase, .node-pair, .storebox, .qcall { display: flex; gap: 6px; align-items: stretch; }
+  .qcall > .label { display: none; }
   .map-phase > .label, .flow, .storebox .io { display: none; }
   .storebox { padding: 6px; }
   .node, .db { min-width: 150px; scroll-snap-align: center; }

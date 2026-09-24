@@ -42,7 +42,7 @@ deploy (OIDC + Terraform) y en el reindexado.
 
 | # | Sección | Problema | Recomendación |
 |---|---------|----------|---------------|
-| I1 | Paso 6 BM25 | `rank_bm25` vive **en memoria**, se reconstruye completo, no se persiste y no se dice de dónde sale el `corpus`. Contradice la sección de "millones de documentos". Tokenización `.split()` sin minúsculas ni puntuación ("Folio:" ≠ "folio"). | Usar **sparse vectors BM25 nativos de Qdrant** (`Modifier.IDF`) + `query_points` con `prefetch` y `Fusion.RRF` (Qdrant ≥ 1.10). Un solo almacén, un solo alias, se versiona junto con el denso. |
+| I1 | Paso 6 BM25 | `rank_bm25` vive **en memoria**, se reconstruye completo, no se persiste y no se dice de dónde sale el `corpus`. Contradice la sección de "millones de documentos". Tokenización `.split()` sin minúsculas ni puntuación ("Folio:" ≠ "folio"). | **Aplicado como única implementación:** BM25 es un vector sparse `bm25` (`Modifier.IDF`) en la misma colección que el denso, y `query_points` hace `prefetch` dense + bm25 con `Fusion.RRF` en el servidor (Qdrant ≥ 1.10). Se eliminó `rank_bm25` de la guía. |
 | I2 | Paso 6 | El texto promete top-20 → rerank → top-5, pero el código hace `fused[:5]` sin rerank. Faltan `dense.py`, `generate.py` y el endpoint `/query` que el checklist da por hecho. | Se añaden rerank (Cohere o cross-encoder local), generación con citas y verificación de citas. |
 | I3 | Paso 7 | `async def ingest` llama código **síncrono y bloqueante** (PDF + OpenAI + Qdrant) → bloquea el event loop para todas las requests. | Endpoint `def` (FastAPI lo corre en threadpool) o cola de ingesta asíncrona. |
 | I4 | Paso 7 | `doc_id = file.filename` → dos PDFs distintos llamados `reporte.pdf` se pisan. Sin límite de tamaño, sin validar tipo, sin auth. | `doc_id` = hash SHA-256 del contenido (o UUID) y `source` = filename. |
@@ -80,7 +80,7 @@ deploy (OIDC + Terraform) y en el reindexado.
 
 ## 3. Contenido nuevo añadido a la guía
 
-- **Paso 6 alternativo (recomendado):** híbrido nativo en Qdrant (dense + sparse BM25 + RRF en una sola query).
+- **Paso 6 reescrito:** híbrido nativo en Qdrant como implementación única (dense + sparse BM25 + RRF en una sola llamada), con tabla comparativa frente a `rank_bm25` y OpenSearch. El Paso 5.3 crea la colección con ambos vectores y la ingesta genera los dos.
 - **Paso 7.2:** `/query` completo — retrieval → rerank → generación → verificación de citas.
 - **Paso 12 — Seguridad** (prompt injection, multi-tenant, auth, PII).
 - **Paso 13 — Observabilidad** (latencia por etapa, trazas, métricas de calidad online).
@@ -89,9 +89,9 @@ deploy (OIDC + Terraform) y en el reindexado.
 
 ## 4. Decisiones abiertas (para el equipo)
 
-1. **BM25 en memoria vs. sparse vectors en Qdrant vs. OpenSearch.** Recomendación: sparse
-   en Qdrant (menos piezas). OpenSearch solo si ya existe en la organización o se necesitan
-   analizadores lingüísticos avanzados para español (stemming, sinónimos).
+1. ~~**BM25 en memoria vs. sparse vectors en Qdrant vs. OpenSearch.**~~ **Resuelta:** sparse
+   BM25 en Qdrant con fusión RRF en el servidor (Paso 6 de la guía). OpenSearch solo si ya
+   existe en la organización o se necesita análisis lingüístico avanzado.
 2. **Rerank vía API (Cohere) vs. cross-encoder autohospedado.** API = cero operación, costo por
    documento; local = costo fijo de GPU/CPU y latencia controlada.
 3. **Multi-tenancy:** payload `tenant_id` con índice `is_tenant` (recomendado por Qdrant) vs.
